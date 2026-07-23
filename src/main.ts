@@ -25,6 +25,7 @@ import {
 } from './audio/feel';
 import {
   askConfirm,
+  askUpdateAvailable,
   renderGoals,
   renderHome,
   renderHowTo,
@@ -37,6 +38,8 @@ import {
   transitionScreen,
   type ScreenHandlers,
 } from './ui/screens';
+import { checkForUpdate, skipVersion, type UpdateInfo } from './app/update';
+import { APP_VERSION } from './app/version';
 import './styles.css';
 
 const COLOR_CLASS = (n: number) => `filled-${n}`;
@@ -98,6 +101,9 @@ const handlers: ScreenHandlers = {
     saveProfile(profile);
     if (profile.haptics) hapticTap();
     showSettings();
+  },
+  onCheckUpdate: () => {
+    void runUpdateCheck({ force: true, fromSettings: true });
   },
 };
 
@@ -1062,6 +1068,57 @@ function startFresh(): void {
   resetHintTimer();
 }
 
+async function openUpdateDownload(info: UpdateInfo): Promise<void> {
+  const url = info.apkUrl || info.releaseUrl;
+  try {
+    const { Browser } = await import('@capacitor/browser');
+    await Browser.open({ url });
+  } catch {
+    window.open(url, '_blank');
+  }
+}
+
+async function promptUpdate(info: UpdateInfo): Promise<void> {
+  const choice = await askUpdateAvailable({
+    version: info.version,
+    notes: info.notes,
+  });
+  if (choice === 'download') {
+    await openUpdateDownload(info);
+  } else if (choice === 'skip') {
+    skipVersion(info.version);
+    showToast(`Won't ask about ${info.version} again`);
+  }
+}
+
+async function runUpdateCheck(opts: {
+  force?: boolean;
+  fromSettings?: boolean;
+}): Promise<void> {
+  const fromSettings = opts.fromSettings ?? false;
+  if (fromSettings) showToast('Checking for updates…');
+
+  const result = await checkForUpdate({
+    force: opts.force ?? false,
+    respectSkip: !fromSettings,
+  });
+
+  if (result.status === 'update') {
+    await promptUpdate(result.info);
+    return;
+  }
+
+  if (!fromSettings) return;
+
+  if (result.status === 'up-to-date' || result.status === 'skipped') {
+    showToast(`You're on the latest version (${APP_VERSION})`);
+  } else if (result.status === 'offline') {
+    showToast('No connection — try again later');
+  } else if (result.status === 'error') {
+    showToast('Could not check for updates');
+  }
+}
+
 function boot(): void {
   showSplash(() => {
     showHome();
@@ -1071,7 +1128,10 @@ function boot(): void {
         saveProfile(profile);
         hapticTap();
         sfx.nice();
+        void runUpdateCheck({ force: false });
       });
+    } else {
+      void runUpdateCheck({ force: false });
     }
   });
 }

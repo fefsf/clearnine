@@ -159,6 +159,7 @@ Resume an unfinished Classic or Daily game without losing your board or score.
 - Score bar, tray, and toolbar stay visible (board scales to free space)
 - Stuck hint: after idle time, the easiest fitting piece gently glows
 - Sound and vibration toggles in **Settings**
+- **Check for updates** in Settings — looks up the latest GitHub release (optional; game stays offline otherwise)
 
 ### Progression (all local)
 

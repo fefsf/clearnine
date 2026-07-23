@@ -1402,6 +1402,14 @@ body {
   font-weight: 700;
 }
 
+.update-notes {
+  max-height: 7.5rem;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 0.95rem;
+  text-align: left;
+}
+
 .score-value.score-pulse {
   animation: score-pulse 0.35s ease-out;
 }
