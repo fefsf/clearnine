@@ -11,10 +11,9 @@ import {
   themeUnlockHint,
 } from '../game/themes';
 import { todayKey } from '../game/rng';
+import { APP_VERSION } from '../app/version';
 
-/** Keep in sync with android/app/build.gradle versionName. */
-export const APP_VERSION = '1.8';
-
+export { APP_VERSION };
 export type ContinueInfo = { mode: GameMode; score: number };
 
 export type ScreenHandlers = {
@@ -30,6 +29,7 @@ export type ScreenHandlers = {
   onSelectTheme: (id: string) => void;
   onToggleMute: () => void;
   onToggleHaptics: () => void;
+  onCheckUpdate: () => void;
 };
 
 function backButton(): string {
@@ -269,6 +269,10 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
           <span class="menu-title">Colors</span>
           <span class="menu-meta">Change theme</span>
         </button>
+        <button type="button" class="menu-btn settings-row" id="btn-check-update">
+          <span class="menu-title">Check for updates</span>
+          <span class="menu-meta">GitHub releases</span>
+        </button>
         <p class="settings-version">ClearNine v${APP_VERSION}</p>
       </div>
     </div>
@@ -276,10 +280,8 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
   root.querySelector('#btn-back')!.addEventListener('click', h.onBackHome);
   root.querySelector('#btn-toggle-sound')!.addEventListener('click', () => {
     h.onToggleMute();
-    const p = profile;
-    // handler mutates profile; re-read labels after
     const sound = root.querySelector('#sound-state');
-    if (sound) sound.textContent = p.mute ? 'Off' : 'On';
+    if (sound) sound.textContent = profile.mute ? 'Off' : 'On';
   });
   root.querySelector('#btn-toggle-haptics')!.addEventListener('click', () => {
     h.onToggleHaptics();
@@ -287,6 +289,7 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
     if (hap) hap.textContent = profile.haptics ? 'On' : 'Off';
   });
   root.querySelector('#btn-open-themes')!.addEventListener('click', h.onThemes);
+  root.querySelector('#btn-check-update')!.addEventListener('click', h.onCheckUpdate);
 }
 
 export function showTutorial(onDone: () => void): void {
@@ -374,4 +377,44 @@ export function askConfirm(message: string): Promise<boolean> {
     wrap.querySelector('#confirm-yes')!.addEventListener('click', () => done(true));
     wrap.querySelector('#confirm-no')!.addEventListener('click', () => done(false));
   });
+}
+
+export type UpdateDialogChoice = 'download' | 'later' | 'skip';
+
+export function askUpdateAvailable(opts: {
+  version: string;
+  notes?: string;
+}): Promise<UpdateDialogChoice> {
+  return new Promise((resolve) => {
+    const note = opts.notes
+      ? `<p class="confirm-msg update-notes">${escapeHtml(opts.notes.slice(0, 280))}${opts.notes.length > 280 ? '…' : ''}</p>`
+      : `<p class="confirm-msg">A newer ClearNine is ready on GitHub. Download the APK and install over this app.</p>`;
+    const wrap = document.createElement('div');
+    wrap.className = 'overlay show confirm-overlay';
+    wrap.innerHTML = `
+      <div class="dialog" role="alertdialog" aria-modal="true">
+        <h2>Update available</h2>
+        <p class="confirm-msg"><strong>ClearNine v${escapeHtml(opts.version)}</strong> is out (you have v${APP_VERSION}).</p>
+        ${note}
+        <button type="button" class="primary-btn" id="update-download">Download update</button>
+        <button type="button" class="secondary-btn" id="update-later">Remind me later</button>
+        <button type="button" class="secondary-btn" id="update-skip">Skip this version</button>
+      </div>`;
+    document.body.appendChild(wrap);
+    const done = (v: UpdateDialogChoice) => {
+      wrap.remove();
+      resolve(v);
+    };
+    wrap.querySelector('#update-download')!.addEventListener('click', () => done('download'));
+    wrap.querySelector('#update-later')!.addEventListener('click', () => done('later'));
+    wrap.querySelector('#update-skip')!.addEventListener('click', () => done('skip'));
+  });
+}
+
+function escapeHtml(s: string): string {
+  return s
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
 }
