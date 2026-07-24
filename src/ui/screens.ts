@@ -62,11 +62,9 @@ export function renderHome(
       <div class="home-content">
         <div class="home-hero">
           <img class="home-logo" src="./clearnine-logo.png" alt="ClearNine" width="160" height="160" />
-          <p class="home-kicker">Block puzzle</p>
-          <h1 class="home-title">ClearNine</h1>
+          <h1 class="home-title">ClearNine <span class="home-version">v${APP_VERSION}</span></h1>
           <div class="home-title-rule" aria-hidden="true"></div>
           <p class="home-sub">Simple. Calm. No ads.</p>
-          <p class="home-version">v${APP_VERSION}</p>
         </div>
 
         ${continueBtn}
