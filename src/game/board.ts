@@ -1,7 +1,18 @@
-import type { Cell, PieceDef } from './pieces';
+import {
+  PIECE_CATALOG,
+  PIECE_COLORS,
+  pieceBounds,
+  type Cell,
+  type PieceDef,
+} from './pieces';
 
 export const BOARD_SIZE = 9;
 export const REGION = 3;
+
+/** Small shapes used as Daily pre-fills (date-seeded). */
+const DAILY_STARTER_POOL: PieceDef[] = PIECE_CATALOG.filter(
+  (p) => p.cells.length >= 1 && p.cells.length <= 4 && p.id !== 'h4' && p.id !== 'v4',
+);
 
 /** 0 = empty; 1–8 = filled color index. */
 export type Board = number[][];
@@ -44,7 +55,7 @@ export function placePiece(
 }
 
 export function pieceFitsAnywhere(board: Board, piece: PieceDef): boolean {
-  const { rows, cols } = bounds(piece.cells);
+  const { rows, cols } = pieceBounds(piece.cells);
   for (let r = 0; r <= BOARD_SIZE - rows; r++) {
     for (let c = 0; c <= BOARD_SIZE - cols; c++) {
       if (canPlace(board, piece, r, c)) return true;
@@ -64,7 +75,7 @@ export function findNearestPlacement(
   targetCol: number,
   maxDist = 1,
 ): { row: number; col: number } | null {
-  const { rows, cols } = bounds(piece.cells);
+  const { rows, cols } = pieceBounds(piece.cells);
   let best: { row: number; col: number; dist: number } | null = null;
 
   for (let r = 0; r <= BOARD_SIZE - rows; r++) {
@@ -81,14 +92,38 @@ export function findNearestPlacement(
   return { row: best.row, col: best.col };
 }
 
-function bounds(cells: Cell[]): { rows: number; cols: number } {
-  let maxR = 0;
-  let maxC = 0;
-  for (const { r, c } of cells) {
-    if (r > maxR) maxR = r;
-    if (c > maxC) maxC = c;
+/**
+ * Pre-fill a Daily board with a couple of small shapes (same for everyone that day).
+ * Never creates an immediate clear.
+ */
+export function seedDailyStarters(board: Board, next: () => number): void {
+  if (DAILY_STARTER_POOL.length === 0) return;
+
+  const pieceCount = next() < 0.55 ? 2 : 3;
+  const usedRegions = new Set<string>();
+
+  for (let i = 0; i < pieceCount; i++) {
+    const piece = DAILY_STARTER_POOL[Math.floor(next() * DAILY_STARTER_POOL.length)]!;
+    const color = 1 + Math.floor(next() * PIECE_COLORS);
+    const { rows, cols } = pieceBounds(piece.cells);
+
+    for (let attempt = 0; attempt < 48; attempt++) {
+      const row = Math.floor(next() * (BOARD_SIZE - rows + 1));
+      const col = Math.floor(next() * (BOARD_SIZE - cols + 1));
+      if (!canPlace(board, piece, row, col)) continue;
+
+      const regionKey = `${Math.floor(row / REGION)},${Math.floor(col / REGION)}`;
+      if (usedRegions.has(regionKey) && attempt < 24) continue;
+
+      const trial = cloneBoard(board);
+      placePiece(trial, piece, row, col, color);
+      if (findClears(trial).clearCount > 0) continue;
+
+      placePiece(board, piece, row, col, color);
+      usedRegions.add(regionKey);
+      break;
+    }
   }
-  return { rows: maxR + 1, cols: maxC + 1 };
 }
 
 export type ClearResult = {

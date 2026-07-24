@@ -122,6 +122,7 @@ Endless high-score mode. Relax, plan, and beat your personal best. Progress auto
 One special run each calendar day:
 
 - The piece sequence is **seeded by the date** (everyone playing that day gets the same deals)
+- The board starts with a couple of **starter blocks** (also date-seeded) so the puzzle is a bit harder
 - Separate “best today” tracking
 - Daily play contributes to streak-style awards
 
