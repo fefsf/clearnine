@@ -948,7 +948,7 @@ function boardGridMetrics(): {
 
 /**
  * Map floating ghost top-left (screen) → piece origin on the board.
- * Clamps slightly outside edges so corner aims still resolve.
+ * Clamps past edges so bottom/corner aims still resolve (finger sits below the piece).
  */
 function originFromGhostOverlay(
   piece: PieceDef,
@@ -959,8 +959,8 @@ function originFromGhostOverlay(
   const { rows, cols } = pieceBounds(piece.cells);
   const col = Math.round((ghostLeft - m.left) / m.pitch);
   const row = Math.round((ghostTop - m.top) / m.pitch);
-  // Allow a little slack past the board for fingertip near edges.
-  if (row < -2 || col < -2 || row > BOARD_SIZE + 1 || col > BOARD_SIZE + 1) {
+  // Extra slack past the board — especially below — for fingertip near edges.
+  if (row < -3 || col < -3 || row > BOARD_SIZE + 3 || col > BOARD_SIZE + 3) {
     return null;
   }
   const maxRow = Math.max(0, BOARD_SIZE - rows);
@@ -971,7 +971,7 @@ function originFromGhostOverlay(
   };
 }
 
-/** Prefer exact overlay; snap at most 1 cell if slightly invalid. */
+/** Prefer exact overlay; snap a little if slightly invalid (helps corners / bottom row). */
 function resolvePlacement(
   trayIndex: number,
   piece: PieceDef,
@@ -984,7 +984,7 @@ function resolvePlacement(
   if (can) {
     return { row: naive.row, col: naive.col, valid: true };
   }
-  const snapped = findNearestPlacement(game.board, piece, naive.row, naive.col, 1);
+  const snapped = findNearestPlacement(game.board, piece, naive.row, naive.col, 2);
   if (snapped) {
     const ok =
       trayIndex < 0
@@ -1124,14 +1124,20 @@ function bindHoldDrag(slot: HTMLButtonElement): void {
   slot.addEventListener('pointercancel', (e) => onPointerEnd(e, slot));
 }
 
-function pointerOverBoard(x: number, y: number): boolean {
+function ghostOverlapsBoard(
+  left: number,
+  top: number,
+  width: number,
+  height: number,
+): boolean {
   const rect = boardEl.getBoundingClientRect();
-  const pad = 12;
-  return (
-    x >= rect.left - pad &&
-    x <= rect.right + pad &&
-    y >= rect.top - pad &&
-    y <= rect.bottom + pad
+  // Generous pad: finger sits below the piece, so bottom-row aims often sit outside the board.
+  const pad = 28;
+  return !(
+    left + width < rect.left - pad ||
+    left > rect.right + pad ||
+    top + height < rect.top - pad ||
+    top > rect.bottom + pad
   );
 }
 
@@ -1187,32 +1193,14 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
     return;
   }
 
-  // Dragged, but released away from the board → cancel (or select if still near tray)
-  if (!pointerOverBoard(x, y)) {
-    if (trayIndex >= 0 && game.holdEnabled() && y > boardEl.getBoundingClientRect().bottom) {
-      selectedTrayForHold = selectedTrayForHold === trayIndex ? null : trayIndex;
-      hapticTap();
-      paintTray();
-      paintHold();
-      if (selectedTrayForHold !== null) showToast('Selected — tap Hold to park it');
-      resetHintTimer();
-      return;
-    }
-    paintTray();
-    paintHold();
-    resetHintTimer();
-    return;
-  }
-
+  // Use the floating piece (not the finger) — finger is below the piece for bottom/corner aims.
   const m = boardGridMetrics();
   const liftPx = m.pitch * 1.25;
   const rect = ghostScreenRect(x, y, piece, m.cellPx, m.gapPx, liftPx);
   const naive = originFromGhostOverlay(piece, rect.left, rect.top);
 
-  if (!naive) {
-    sfx.bad();
-    hapticBad();
-    shakeBoard();
+  if (!naive || !ghostOverlapsBoard(rect.left, rect.top, rect.width, rect.height)) {
+    // Released nowhere near the board — cancel quietly (not a failed place shake)
     paintTray();
     paintHold();
     resetHintTimer();
