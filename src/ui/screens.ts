@@ -2,6 +2,7 @@ import { GOALS } from '../game/goals';
 import {
   dailyPlayStreak,
   getDailyBest,
+  getWeeklyBest,
   type GameMode,
   type Profile,
 } from '../game/stats';
@@ -10,6 +11,7 @@ import {
   isThemeUnlocked,
   themeUnlockHint,
 } from '../game/themes';
+import { EXPERT_BLURB, EXPERT_FEATURE_LINES, weekKey } from '../game/expert';
 import { todayKey } from '../game/rng';
 import { APP_VERSION } from '../app/version';
 
@@ -19,6 +21,8 @@ export type ContinueInfo = { mode: GameMode; score: number };
 export type ScreenHandlers = {
   onClassic: () => void;
   onDaily: () => void;
+  onWeekly: () => void;
+  onBlitz: () => void;
   onContinue: () => void;
   onRecords: () => void;
   onGoals: () => void;
@@ -29,11 +33,19 @@ export type ScreenHandlers = {
   onSelectTheme: (id: string) => void;
   onToggleMute: () => void;
   onToggleHaptics: () => void;
+  onToggleExpert: () => void;
   onCheckUpdate: () => void;
 };
 
 function backButton(): string {
   return `<button type="button" class="text-btn back-btn" id="btn-back">← Back to menu</button>`;
+}
+
+function modeLabel(mode: GameMode): string {
+  if (mode === 'daily') return 'Today’s Puzzle';
+  if (mode === 'weekly') return 'Weekly Challenge';
+  if (mode === 'blitz') return 'Endgame Sprint';
+  return 'Play';
 }
 
 export function renderHome(
@@ -42,11 +54,30 @@ export function renderHome(
   h: ScreenHandlers,
   continueInfo: ContinueInfo | null,
 ): void {
-  const dailyBest = getDailyBest(profile);
+  const expert = profile.expertMode;
+  const dailyBest = getDailyBest(profile, todayKey(), expert);
+  const week = weekKey();
+  const classicBest = expert ? profile.bestClassicExpert : profile.bestClassic;
   const continueBtn = continueInfo
     ? `<button type="button" class="menu-btn continue" id="btn-continue">
           <span class="menu-title">Continue</span>
-          <span class="menu-meta">${continueInfo.mode === 'daily' ? 'Today’s Puzzle' : 'Play'} · ${continueInfo.score} points so far</span>
+          <span class="menu-meta">${modeLabel(continueInfo.mode)} · ${continueInfo.score} points so far</span>
+        </button>`
+    : '';
+
+  const expertBadge = expert
+    ? `<p class="home-expert-badge">Expert Mode on</p>`
+    : '';
+
+  const expertModes = expert
+    ? `
+        <button type="button" class="menu-btn" id="btn-weekly">
+          <span class="menu-title">Weekly Challenge</span>
+          <span class="menu-meta">One tough board this week · Best: ${getWeeklyBest(profile, week)}</span>
+        </button>
+        <button type="button" class="menu-btn" id="btn-blitz">
+          <span class="menu-title">Endgame Sprint</span>
+          <span class="menu-meta">Crowded start · Best: ${profile.bestBlitz}</span>
         </button>`
     : '';
 
@@ -65,19 +96,22 @@ export function renderHome(
           <h1 class="home-title">ClearNine <span class="home-version">v${APP_VERSION}</span></h1>
           <div class="home-title-rule" aria-hidden="true"></div>
           <p class="home-sub">Simple. Calm. No ads.</p>
+          ${expertBadge}
         </div>
 
         ${continueBtn}
 
         <button type="button" class="menu-btn primary" id="btn-classic">
           <span class="menu-title">${continueInfo?.mode === 'classic' ? 'New Play game' : 'Play'}</span>
-          <span class="menu-meta">Relaxing game · Best score: ${profile.bestClassic}</span>
+          <span class="menu-meta">${expert ? 'Expert · Hold + rising pressure' : 'Relaxing game'} · Best: ${classicBest}</span>
         </button>
 
         <button type="button" class="menu-btn" id="btn-daily">
-          <span class="menu-title">${continueInfo?.mode === 'daily' ? 'New Today’s Puzzle' : 'Today’s Puzzle'}</span>
-          <span class="menu-meta">Seeded daily run with starter blocks · Today’s best: ${dailyBest}</span>
+          <span class="menu-title">${continueInfo?.mode === 'daily' ? 'New Today’s Puzzle' : expert ? 'Expert Daily' : 'Today’s Puzzle'}</span>
+          <span class="menu-meta">${expert ? 'Harder seeded daily' : 'Seeded daily with starter blocks'} · Best: ${dailyBest}</span>
         </button>
+
+        ${expertModes}
 
         <div class="menu-row">
           <button type="button" class="menu-btn secondary" id="btn-records">
@@ -98,7 +132,7 @@ export function renderHome(
         </div>
 
         <button type="button" class="menu-btn secondary howto-home-btn" id="btn-howto">
-          <span class="menu-title">How to Play</span>
+          <span class="menu-title">${expert ? 'How to Play Expert Mode' : 'How to Play'}</span>
         </button>
       </div>
     </div>
@@ -106,6 +140,8 @@ export function renderHome(
   root.querySelector('#btn-continue')?.addEventListener('click', h.onContinue);
   root.querySelector('#btn-classic')!.addEventListener('click', h.onClassic);
   root.querySelector('#btn-daily')!.addEventListener('click', h.onDaily);
+  root.querySelector('#btn-weekly')?.addEventListener('click', h.onWeekly);
+  root.querySelector('#btn-blitz')?.addEventListener('click', h.onBlitz);
   root.querySelector('#btn-records')!.addEventListener('click', h.onRecords);
   root.querySelector('#btn-goals')!.addEventListener('click', h.onGoals);
   root.querySelector('#btn-themes')!.addEventListener('click', h.onThemes);
@@ -113,7 +149,133 @@ export function renderHome(
   root.querySelector('#btn-howto')!.addEventListener('click', h.onHowTo);
 }
 
-export function renderHowTo(root: HTMLElement, h: ScreenHandlers): void {
+export function renderHowTo(root: HTMLElement, h: ScreenHandlers, expert = false): void {
+  if (expert) {
+    root.innerHTML = `
+      <div class="screen panel-screen">
+        <header class="panel-head">
+          ${backButton()}
+        </header>
+        <h2 class="panel-title">Expert Mode</h2>
+        <p class="panel-lead">A full guide to the harder ClearNine.</p>
+        <div class="panel-body howto-body">
+          <section class="howto-section">
+            <h3 class="howto-h">What is Expert Mode?</h3>
+            <p class="howto-p">${EXPERT_BLURB}</p>
+            <p class="howto-p">Turn it on or off anytime in <strong>Settings → Expert Mode</strong>. Off returns the app to the calm original game.</p>
+          </section>
+
+          <section class="howto-section">
+            <h3 class="howto-h">Basics (same as normal)</h3>
+            <ol class="howto-list">
+              <li>
+                <strong>Drag a shape</strong>
+                <span>From the tray onto the board. Drag far enough — a light tap will not place it.</span>
+              </li>
+              <li>
+                <strong>Clear lines</strong>
+                <span>Fill a full row, column, or 3×3 box to clear those blocks and score.</span>
+              </li>
+              <li>
+                <strong>Combos & streaks</strong>
+                <span>Clear more than one line at once for a combo. Clear on back-to-back turns for a streak.</span>
+              </li>
+              <li>
+                <strong>Game over</strong>
+                <span>When nothing in your tray (or Hold) can fit, the run ends.</span>
+              </li>
+            </ol>
+          </section>
+
+          <section class="howto-section">
+            <h3 class="howto-h">Hold (Play & Weekly)</h3>
+            <ol class="howto-list">
+              <li>
+                <strong>Select</strong>
+                <span><em>Tap</em> a tray piece (don’t drag). It highlights and you’ll see a short tip.</span>
+              </li>
+              <li>
+                <strong>Park</strong>
+                <span>Tap the <em>Hold</em> button to move that piece into Hold.</span>
+              </li>
+              <li>
+                <strong>Place later</strong>
+                <span>Drag from Hold onto the board when you’re ready.</span>
+              </li>
+              <li>
+                <strong>Swap</strong>
+                <span>Tap another tray piece, then tap Hold again to swap.</span>
+              </li>
+            </ol>
+            <p class="howto-p">Hold is not available in Expert Daily or Endgame Sprint.</p>
+          </section>
+
+          <section class="howto-section">
+            <h3 class="howto-h">Expert Play</h3>
+            <ul class="howto-bullets">
+              <li><strong>Hold slot</strong> — park one awkward piece.</li>
+              <li><strong>Rising pressure</strong> — as your score climbs, larger / tougher pieces show up more often.</li>
+              <li><strong>Separate best score</strong> — Expert Play bests don’t overwrite your calm-mode best.</li>
+              <li><strong>Beat-your-best</strong> — a target under the scoreboard shows how close you are to your Expert best.</li>
+            </ul>
+          </section>
+
+          <section class="howto-section">
+            <h3 class="howto-h">Expert Daily</h3>
+            <ul class="howto-bullets">
+              <li>Same idea as Today’s Puzzle, but <strong>harder</strong>: denser starter blocks and tougher piece deals.</li>
+              <li>Seeded by the date — everyone on Expert gets the same hard puzzle that day.</li>
+              <li>Has its own <strong>Expert Daily best</strong> (separate from the normal Daily).</li>
+            </ul>
+          </section>
+
+          <section class="howto-section">
+            <h3 class="howto-h">Weekly Challenge</h3>
+            <ul class="howto-bullets">
+              <li>One tough seeded board for the whole week.</li>
+              <li>Starts with a crowded layout; Hold is available.</li>
+              <li>Tracks a <strong>Weekly best</strong> for that week.</li>
+            </ul>
+          </section>
+
+          <section class="howto-section">
+            <h3 class="howto-h">Endgame Sprint</h3>
+            <ul class="howto-bullets">
+              <li>Starts on a <strong>crowded</strong> board — less empty space from the first move.</li>
+              <li>Great for short, intense runs. Tracks an <strong>Endgame best</strong>.</li>
+            </ul>
+          </section>
+
+          <section class="howto-section">
+            <h3 class="howto-h">Scores, awards & sharing</h3>
+            <ul class="howto-bullets">
+              <li><strong>My Scores</strong> adds Expert Play / Daily / Weekly / Endgame bests, plus best combo and streak.</li>
+              <li><strong>Awards</strong> include high-skill trophies (8,000 points, Combo ×5, long streaks, Weekly, Endgame, and more).</li>
+              <li>When a run ends, <strong>Share score</strong> copies or shares a short summary.</li>
+            </ul>
+          </section>
+
+          <section class="howto-section">
+            <h3 class="howto-h">Tips for high scorers</h3>
+            <ul class="howto-bullets">
+              <li>Use Hold for pieces that don’t fit your current plan — don’t force a bad place.</li>
+              <li>Early Expert Play is calmer; pressure ramps up after big scores.</li>
+              <li>Weekly and Endgame reward planning over speed — there’s still no timer.</li>
+              <li>Turn Expert Mode off in Settings anytime you want the original calm game back.</li>
+            </ul>
+          </section>
+
+          <button type="button" class="primary-btn" id="btn-start-play">Start Expert Play</button>
+          <button type="button" class="secondary-btn" id="btn-start-daily">Try Expert Daily</button>
+        </div>
+      </div>
+    `;
+    root.querySelector('#btn-back')!.addEventListener('click', h.onBackHome);
+    root.querySelector('#btn-start-play')!.addEventListener('click', h.onClassic);
+    root.querySelector('#btn-start-daily')!.addEventListener('click', h.onDaily);
+    return;
+  }
+
   root.innerHTML = `
     <div class="screen panel-screen">
       <header class="panel-head">
@@ -143,6 +305,7 @@ export function renderHowTo(root: HTMLElement, h: ScreenHandlers): void {
             <span>Tap <em>Undo</em> if you make a mistake (limited times per game).</span>
           </li>
         </ol>
+        <p class="howto-p howto-expert-hint">Want more challenge? Turn on <strong>Expert Mode</strong> in Settings for Hold, harder Daily, Weekly, and Endgame.</p>
         <button type="button" class="primary-btn" id="btn-start-play">Start playing</button>
       </div>
     </div>
@@ -153,19 +316,32 @@ export function renderHowTo(root: HTMLElement, h: ScreenHandlers): void {
 
 export function renderRecords(root: HTMLElement, profile: Profile, h: ScreenHandlers): void {
   const today = todayKey();
+  const week = weekKey();
   const streak = dailyPlayStreak(profile);
   const s = profile.stats;
+  const expert = profile.expertMode;
   const recent = profile.recentGames
     .slice(0, 12)
-    .map(
-      (g) =>
-        `<li>
-          <span class="rec-mode">${g.mode === 'daily' ? 'Today’s Puzzle' : 'Play'}</span>
+    .map((g) => {
+      const label = modeLabel(g.mode);
+      const tag = g.expert ? ' · Expert' : '';
+      return `<li>
+          <span class="rec-mode">${label}${tag}</span>
           <span class="rec-score">${g.score} points</span>
           <span class="rec-date">${g.date}</span>
-        </li>`,
-    )
+        </li>`;
+    })
     .join('');
+
+  const expertStats = expert
+    ? `
+          <div class="stat-card"><span class="stat-label">Expert Play best</span><span class="stat-num">${profile.bestClassicExpert}</span></div>
+          <div class="stat-card"><span class="stat-label">Expert Daily best</span><span class="stat-num">${getDailyBest(profile, today, true)}</span></div>
+          <div class="stat-card"><span class="stat-label">Weekly best</span><span class="stat-num">${getWeeklyBest(profile, week)}</span></div>
+          <div class="stat-card"><span class="stat-label">Endgame best</span><span class="stat-num">${profile.bestBlitz}</span></div>
+          <div class="stat-card"><span class="stat-label">Best combo</span><span class="stat-num">×${s.maxCombo}</span></div>
+          <div class="stat-card"><span class="stat-label">Best streak</span><span class="stat-num">${s.maxStreak}</span></div>`
+    : '';
 
   root.innerHTML = `
     <div class="screen panel-screen">
@@ -176,9 +352,10 @@ export function renderRecords(root: HTMLElement, profile: Profile, h: ScreenHand
       <div class="panel-body">
         <div class="stat-grid">
           <div class="stat-card"><span class="stat-label">Best Play score</span><span class="stat-num">${profile.bestClassic}</span></div>
-          <div class="stat-card"><span class="stat-label">Best today</span><span class="stat-num">${getDailyBest(profile, today)}</span></div>
+          <div class="stat-card"><span class="stat-label">Best today</span><span class="stat-num">${getDailyBest(profile, today, false)}</span></div>
           <div class="stat-card"><span class="stat-label">Days in a row</span><span class="stat-num">${streak}</span></div>
           <div class="stat-card"><span class="stat-label">Games finished</span><span class="stat-num">${s.gamesPlayed}</span></div>
+          ${expertStats}
         </div>
         <h3 class="section-title">Recent games</h3>
         <ul class="recent-list">${recent || '<li class="empty-note">No games yet — tap Play on the menu!</li>'}</ul>
@@ -247,13 +424,14 @@ export function renderThemes(root: HTMLElement, profile: Profile, h: ScreenHandl
 }
 
 export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHandlers): void {
+  const features = EXPERT_FEATURE_LINES.map((line) => `<li>${line}</li>`).join('');
   root.innerHTML = `
     <div class="screen panel-screen">
       <header class="panel-head">
         ${backButton()}
       </header>
       <h2 class="panel-title">Settings</h2>
-      <p class="panel-lead">Tune sound and feel.</p>
+      <p class="panel-lead">Tune sound, feel, and challenge.</p>
       <div class="panel-body settings-list">
         <button type="button" class="menu-btn settings-row" id="btn-toggle-sound">
           <span class="menu-title">Sound</span>
@@ -267,6 +445,15 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
           <span class="menu-title">Colors</span>
           <span class="menu-meta">Change theme</span>
         </button>
+        <button type="button" class="menu-btn settings-row expert-toggle ${profile.expertMode ? 'expert-on' : ''}" id="btn-toggle-expert">
+          <span class="menu-title">Expert Mode</span>
+          <span class="menu-meta" id="expert-state">${profile.expertMode ? 'On' : 'Off'}</span>
+        </button>
+        <div class="expert-explain">
+          <p class="expert-blurb">${EXPERT_BLURB}</p>
+          <ul class="expert-feature-list">${features}</ul>
+          <p class="expert-note">Turn Expert Mode off anytime — Play and Daily go back to the original calm rules.</p>
+        </div>
         <button type="button" class="menu-btn settings-row" id="btn-check-update">
           <span class="menu-title">Check for updates</span>
           <span class="menu-meta">GitHub releases</span>
@@ -285,6 +472,9 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
     h.onToggleHaptics();
     const hap = root.querySelector('#haptics-state');
     if (hap) hap.textContent = profile.haptics ? 'On' : 'Off';
+  });
+  root.querySelector('#btn-toggle-expert')!.addEventListener('click', () => {
+    h.onToggleExpert();
   });
   root.querySelector('#btn-open-themes')!.addEventListener('click', h.onThemes);
   root.querySelector('#btn-check-update')!.addEventListener('click', h.onCheckUpdate);

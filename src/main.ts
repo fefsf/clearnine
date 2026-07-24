@@ -1,10 +1,12 @@
 import { BOARD_SIZE, REGION, findNearestPlacement, pieceFitsAnywhere, type ClearResult } from './game/board';
 import { findContinueGame, Game } from './game/game';
+import { weekKey } from './game/expert';
 import { evaluateGoals } from './game/goals';
 import { cellCount, colorForPiece, pieceBounds, type PieceDef } from './game/pieces';
 import { todayKey } from './game/rng';
 import {
   getDailyBest,
+  getWeeklyBest,
   loadProfile,
   recordGameFinished,
   recordPlacement,
@@ -61,11 +63,27 @@ let cheeredBestThisGame = false;
 let displayedScore = 0;
 let scoreAnim: number | null = null;
 
+function modeTitle(mode: GameMode): string {
+  if (mode === 'daily') return game.expert ? 'Expert Daily' : 'Today’s Puzzle';
+  if (mode === 'weekly') return 'Weekly Challenge';
+  if (mode === 'blitz') return 'Endgame Sprint';
+  return game.expert ? 'Expert Play' : 'Play';
+}
+
+function bestTarget(): number {
+  if (game.mode === 'daily') return getDailyBest(profile, todayKey(), game.expert);
+  if (game.mode === 'weekly') return getWeeklyBest(profile, weekKey());
+  if (game.mode === 'blitz') return profile.bestBlitz;
+  return game.expert ? profile.bestClassicExpert : profile.bestClassic;
+}
+
 const handlers: ScreenHandlers = {
   onClassic: () => void beginMode('classic'),
   onDaily: () => void beginMode('daily'),
+  onWeekly: () => void beginMode('weekly'),
+  onBlitz: () => void beginMode('blitz'),
   onContinue: () => {
-    const info = findContinueGame();
+    const info = findContinueGame(profile.expertMode);
     if (!info) {
       showHome();
       return;
@@ -102,18 +120,32 @@ const handlers: ScreenHandlers = {
     if (profile.haptics) hapticTap();
     showSettings();
   },
+  onToggleExpert: () => {
+    profile.expertMode = !profile.expertMode;
+    saveProfile(profile);
+    hapticTap();
+    sfx.tap();
+    showSettings();
+    showToast(
+      profile.expertMode
+        ? 'Expert Mode on — harder options unlocked'
+        : 'Expert Mode off — back to the calm game',
+    );
+  },
   onCheckUpdate: () => {
     void runUpdateCheck({ force: true, fromSettings: true });
   },
 };
 
 async function beginMode(mode: GameMode): Promise<void> {
-  const cont = findContinueGame();
+  const cont = findContinueGame(profile.expertMode);
   if (cont?.mode === mode) {
     const ok = await askConfirm(
       mode === 'daily'
         ? 'Start a brand new Today’s Puzzle? Your current puzzle will be cleared.'
-        : 'Start a brand new game? Your current board will be cleared.',
+        : mode === 'weekly'
+          ? 'Start a brand new Weekly Challenge? Your current board will be cleared.'
+          : 'Start a brand new game? Your current board will be cleared.',
     );
     if (!ok) return;
   }
@@ -125,7 +157,7 @@ function showHome(): void {
   teardownPlayLayout();
   profile = loadProfile();
   transitionScreen(app, () => {
-    renderHome(app, profile, handlers, findContinueGame());
+    renderHome(app, profile, handlers, findContinueGame(profile.expertMode));
   });
 }
 
@@ -150,13 +182,18 @@ function showSettings(): void {
 }
 
 function showHowTo(): void {
-  transitionScreen(app, () => renderHowTo(app, handlers));
+  profile = loadProfile();
+  transitionScreen(app, () => renderHowTo(app, handlers, profile.expertMode));
 }
 
 function startPlay(mode: GameMode, resume: boolean): void {
   sessionClears = 0;
   cheeredBestThisGame = false;
-  game.configure(mode, todayKey());
+  game.configure(mode, {
+    dailyDate: todayKey(),
+    week: weekKey(),
+    expert: profile.expertMode,
+  });
   transitionScreen(app, () => {
     mountPlayUi(mode);
     if (resume) {
@@ -168,6 +205,7 @@ function startPlay(mode: GameMode, resume: boolean): void {
     displayedScore = game.score;
     paintBoard();
     paintTray(true);
+    paintHold();
     updateHud(true);
     hideGameOver();
     requestAnimationFrame(() => {
@@ -180,7 +218,16 @@ function startPlay(mode: GameMode, resume: boolean): void {
 }
 
 function mountPlayUi(mode: GameMode): void {
-  const modeLabel = mode === 'daily' ? 'Today’s Puzzle' : 'Play';
+  const modeLabel = modeTitle(mode);
+  const holdHtml = game.holdEnabled()
+    ? `<div class="hold-wrap">
+        <button type="button" class="hold-slot" id="hold-slot" aria-label="Hold piece">
+          <span class="hold-label">Hold</span>
+          <div class="hold-preview" id="hold-preview"></div>
+        </button>
+        <p class="hold-hint">Tap a tray piece, then Hold to park it</p>
+      </div>`
+    : '';
   app.classList.add('play-layout');
   app.innerHTML = `
     <header class="play-top">
@@ -198,6 +245,7 @@ function mountPlayUi(mode: GameMode): void {
         <span class="score-value" id="best">0</span>
       </div>
     </div>
+    <p class="beat-target" id="beat-target" hidden></p>
 
     <div class="board-wrap">
       <div class="board" id="board" role="grid" aria-label="Puzzle board"></div>
@@ -208,6 +256,7 @@ function mountPlayUi(mode: GameMode): void {
 
     <p class="tray-label" id="hint">Your pieces — drag one onto the board</p>
     <div class="tray" id="tray" aria-label="Your pieces"></div>
+    ${holdHtml}
 
     <div class="play-toolbar">
       <button type="button" class="tool-btn" id="undo-btn">
@@ -234,6 +283,7 @@ function mountPlayUi(mode: GameMode): void {
         <div class="final-score" id="final-score">0</div>
         <p id="best-note"></p>
         <button type="button" class="primary-btn" id="again-btn">Play again</button>
+        <button type="button" class="secondary-btn" id="share-btn" hidden>Share score</button>
         <button type="button" class="secondary-btn" id="over-home-btn">Back to menu</button>
       </div>
     </div>
@@ -272,6 +322,7 @@ let trayEl: HTMLDivElement;
 let scoreEl: HTMLSpanElement;
 let bestEl: HTMLSpanElement;
 let bestLabel: HTMLSpanElement;
+let beatTargetEl: HTMLParagraphElement;
 let muteBtn: HTMLButtonElement;
 let muteTitle: HTMLSpanElement;
 let newBtn: HTMLButtonElement;
@@ -282,6 +333,7 @@ let overlay: HTMLDivElement;
 let finalScore: HTMLDivElement;
 let bestNote: HTMLParagraphElement;
 let againBtn: HTMLButtonElement;
+let shareBtn: HTMLButtonElement;
 let overHomeBtn: HTMLButtonElement;
 let dragGhost: HTMLDivElement;
 let comboBanner: HTMLDivElement;
@@ -289,6 +341,9 @@ let streakBanner: HTMLDivElement;
 let celebrateBanner: HTMLDivElement;
 let hintEl: HTMLParagraphElement;
 let overTitle: HTMLHeadingElement;
+let holdSlotBtn: HTMLButtonElement | null = null;
+let holdPreview: HTMLDivElement | null = null;
+let selectedTrayForHold: number | null = null;
 const cells: HTMLDivElement[] = [];
 
 function bindPlayDom(): void {
@@ -297,6 +352,7 @@ function bindPlayDom(): void {
   scoreEl = app.querySelector('#score')!;
   bestEl = app.querySelector('#best')!;
   bestLabel = app.querySelector('#best-label')!;
+  beatTargetEl = app.querySelector('#beat-target')!;
   muteBtn = app.querySelector('#mute-btn')!;
   muteTitle = app.querySelector('#mute-title')!;
   newBtn = app.querySelector('#new-btn')!;
@@ -307,6 +363,7 @@ function bindPlayDom(): void {
   finalScore = app.querySelector('#final-score')!;
   bestNote = app.querySelector('#best-note')!;
   againBtn = app.querySelector('#again-btn')!;
+  shareBtn = app.querySelector('#share-btn')!;
   overHomeBtn = app.querySelector('#over-home-btn')!;
   dragGhost = app.querySelector('#drag-ghost')!;
   comboBanner = app.querySelector('#combo-banner')!;
@@ -314,54 +371,49 @@ function bindPlayDom(): void {
   celebrateBanner = app.querySelector('#celebrate-banner')!;
   hintEl = app.querySelector('#hint')!;
   overTitle = app.querySelector('#over-title')!;
+  holdSlotBtn = app.querySelector('#hold-slot');
+  holdPreview = app.querySelector('#hold-preview');
 
   muteBtn.addEventListener('click', () => {
     sfx.toggleMute();
     profile.mute = sfx.muted;
     saveProfile(profile);
     hapticTap();
-    sfx.tap();
-    updateHud();
-  });
-
-  newBtn.addEventListener('click', () => {
-    void (async () => {
-      hapticTap();
-      if (game.score > 0 && !game.gameOver) {
-        const ok = await askConfirm('Start a brand new game? Your current board will be cleared.');
-        if (!ok) return;
-      }
-      startFresh();
-    })();
+    updateHud(true);
   });
 
   undoBtn.addEventListener('click', () => {
     if (!game.undo()) return;
-    clearHintHighlight();
+    selectedTrayForHold = null;
     boardEl.classList.add('board-undo');
     sfx.undo();
     hapticUndo();
     paintBoard();
     paintTray(true);
-    animateScoreTo(game.score);
-    updateHud();
+    paintHold();
+    updateHud(true);
     setTimeout(() => boardEl.classList.remove('board-undo'), 280);
     resetHintTimer();
   });
 
-  homeBtn.addEventListener('click', () => {
-    hapticTap();
-    showHome();
+  newBtn.addEventListener('click', () => {
+    void (async () => {
+      const ok = await askConfirm('Start over? This board will be cleared.');
+      if (!ok) return;
+      startFresh();
+    })();
   });
 
+  homeBtn.addEventListener('click', () => showHome());
   againBtn.addEventListener('click', () => {
-    hapticTap();
     startFresh();
   });
-  overHomeBtn.addEventListener('click', () => {
-    hapticTap();
-    showHome();
-  });
+  shareBtn.addEventListener('click', () => void shareRunScore());
+  overHomeBtn.addEventListener('click', () => showHome());
+
+  if (holdSlotBtn) {
+    bindHoldDrag(holdSlotBtn);
+  }
 }
 
 function buildBoard(): void {
@@ -438,6 +490,7 @@ function paintTray(animateIn = false): void {
       slot.innerHTML = piecePreviewHtml(piece, cellPx);
       bindDrag(slot, i);
       if (hintSlot === i) slot.classList.add('hint-pulse');
+      if (selectedTrayForHold === i) slot.classList.add('hold-selected');
       if (animateIn) {
         slot.classList.add('tray-in');
         slot.style.animationDelay = `${i * 70}ms`;
@@ -445,6 +498,19 @@ function paintTray(animateIn = false): void {
     }
     trayEl.appendChild(slot);
   }
+}
+
+function paintHold(): void {
+  if (!holdPreview || !holdSlotBtn) return;
+  holdSlotBtn.classList.toggle('has-piece', !!game.hold);
+  holdSlotBtn.classList.toggle('awaiting', selectedTrayForHold !== null);
+  if (!game.hold) {
+    holdPreview.innerHTML = '<span class="hold-empty">+</span>';
+    return;
+  }
+  const { cols } = pieceBounds(game.hold.cells);
+  const cellPx = cols >= 5 ? 14 : cols >= 4 ? 18 : 22;
+  holdPreview.innerHTML = piecePreviewHtml(game.hold, cellPx);
 }
 
 function animateScoreTo(target: number): void {
@@ -482,19 +548,35 @@ function updateHud(snapScore = false): void {
   } else {
     animateScoreTo(game.score);
   }
+  const target = bestTarget();
   if (game.mode === 'daily') {
-    bestLabel.textContent = 'Best today';
-    bestEl.textContent = String(Math.max(getDailyBest(profile), game.score));
+    bestLabel.textContent = game.expert ? 'Expert best' : 'Best today';
+  } else if (game.mode === 'weekly') {
+    bestLabel.textContent = 'Week best';
+  } else if (game.mode === 'blitz') {
+    bestLabel.textContent = 'Sprint best';
   } else {
-    bestLabel.textContent = 'Best ever';
-    bestEl.textContent = String(Math.max(profile.bestClassic, game.score));
+    bestLabel.textContent = game.expert ? 'Expert best' : 'Best ever';
   }
+  bestEl.textContent = String(Math.max(target, game.score));
+
+  if (game.expert && target > 0) {
+    beatTargetEl.hidden = false;
+    const remain = Math.max(0, target + 1 - game.score);
+    beatTargetEl.textContent =
+      remain === 0 ? 'You’re at your best — keep going!' : `Beat your best: ${target} · ${remain} to go`;
+  } else {
+    beatTargetEl.hidden = true;
+  }
+
   muteTitle.textContent = sfx.muted ? 'Sound Off' : 'Sound On';
   undoBtn.disabled = !game.canUndo();
   undoBtn.classList.toggle('disabled', !game.canUndo());
   undoMeta.textContent = `${game.undosLeft} left`;
   if (hintSlot === null) {
-    hintEl.textContent = 'Your pieces — drag one onto the board';
+    hintEl.textContent = game.holdEnabled()
+      ? 'Drag a piece — or tap one, then Hold to park it'
+      : 'Your pieces — drag one onto the board';
     hintEl.classList.remove('hint-active');
   }
 }
@@ -548,16 +630,9 @@ function showStuckHint(): void {
 
 function maybeCheerNewBest(): void {
   if (cheeredBestThisGame) return;
-  let isNew = false;
-  if (game.mode === 'classic' && game.score > profile.bestClassic) {
-    isNew = true;
-  }
-  if (game.mode === 'daily' && game.score > getDailyBest(profile)) {
-    isNew = true;
-  }
-  if (!isNew) return;
+  const target = bestTarget();
+  if (game.score <= target) return;
   cheeredBestThisGame = true;
-  if (game.mode === 'classic') profile.bestClassic = game.score;
   flashCelebrate('New personal best!');
   sfx.cheer();
   hapticCheer();
@@ -588,29 +663,52 @@ function checkAndToastGoals(): void {
 function onGameOver(): void {
   stopHintTimer();
   clearHintHighlight();
-  const { newClassicBest, newDailyBest } = recordGameFinished(profile, {
+  selectedTrayForHold = null;
+  const result = recordGameFinished(profile, {
     mode: game.mode,
     score: game.score,
     cleared: sessionClears,
+    week: weekKey(),
+    expert: game.expert,
   });
   checkAndToastGoals();
 
-  const isBest = newClassicBest || newDailyBest;
+  const isBest =
+    result.newClassicBest ||
+    result.newDailyBest ||
+    result.newWeeklyBest ||
+    result.newBlitzBest;
   overTitle.textContent = isBest ? 'New personal best!' : 'Great game!';
   finalScore.textContent = String(game.score);
   if (isBest) {
     bestNote.textContent = 'That’s a new personal best — amazing!';
     sfx.cheer();
     hapticCheer();
-  } else if (game.mode === 'daily') {
-    bestNote.textContent = `Best today: ${getDailyBest(profile)}`;
-    sfx.gameOver();
-    showToast('Daily puzzle finished');
   } else {
-    bestNote.textContent = `Best ever: ${profile.bestClassic}`;
+    bestNote.textContent = `${bestLabel.textContent}: ${bestTarget()}`;
     sfx.gameOver();
+    if (game.mode === 'daily') showToast('Daily puzzle finished');
   }
+  shareBtn.hidden = !game.expert;
   overlay.classList.add('show', 'overlay-pop');
+}
+
+async function shareRunScore(): Promise<void> {
+  const text = `ClearNine ${modeTitle(game.mode)}: ${game.score} points${game.expert ? ' · Expert' : ''} · v${APP_VERSION}`;
+  try {
+    if (navigator.share) {
+      await navigator.share({ title: 'ClearNine', text });
+      return;
+    }
+  } catch {
+    /* fall through */
+  }
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('Score copied');
+  } catch {
+    showToast(text);
+  }
 }
 
 function showGameOver(): void {
@@ -787,13 +885,20 @@ function highlightGhost(
 }
 
 type DragState = {
+  /** -1 means placing from Hold. */
   trayIndex: number;
   piece: PieceDef;
   pointerId: number;
   cellPx: number;
   gapPx: number;
   liftPx: number;
+  moved: boolean;
+  startX: number;
+  startY: number;
 };
+
+/** Finger must travel this far before a gesture counts as a drag-to-place. */
+const DRAG_THRESHOLD_PX = 18;
 
 let drag: DragState | null = null;
 
@@ -872,12 +977,20 @@ function resolvePlacement(
   piece: PieceDef,
   naive: { row: number; col: number },
 ): { row: number; col: number; valid: boolean } {
-  if (game.canPlaceAt(trayIndex, naive.row, naive.col)) {
+  const can =
+    trayIndex < 0
+      ? game.canPlaceHoldAt(naive.row, naive.col)
+      : game.canPlaceAt(trayIndex, naive.row, naive.col);
+  if (can) {
     return { row: naive.row, col: naive.col, valid: true };
   }
   const snapped = findNearestPlacement(game.board, piece, naive.row, naive.col, 1);
   if (snapped) {
-    return { row: snapped.row, col: snapped.col, valid: true };
+    const ok =
+      trayIndex < 0
+        ? game.canPlaceHoldAt(snapped.row, snapped.col)
+        : game.canPlaceAt(trayIndex, snapped.row, snapped.col);
+    if (ok) return { row: snapped.row, col: snapped.col, valid: true };
   }
   return { row: naive.row, col: naive.col, valid: false };
 }
@@ -911,6 +1024,7 @@ function bindDrag(slot: HTMLDivElement, trayIndex: number): void {
     clearHintHighlight();
     slot.setPointerCapture(e.pointerId);
 
+    const { x, y } = pointerPos(e);
     const m = boardGridMetrics();
     const liftPx = m.pitch * 1.25;
     drag = {
@@ -920,18 +1034,25 @@ function bindDrag(slot: HTMLDivElement, trayIndex: number): void {
       cellPx: m.cellPx,
       gapPx: m.gapPx,
       liftPx,
+      moved: false,
+      startX: x,
+      startY: y,
     };
-    slot.style.opacity = '0.25';
-
-    dragGhost.innerHTML = piecePreviewHtml(piece, m.cellPx, m.gapPx);
-    dragGhost.classList.add('active', 'ghost-lift');
+    // Don't dim / show board ghost until the finger actually drags
     slot.classList.add('dragging');
-    moveDragGhost(e);
-    updatePlacementGhost(e);
   });
 
   slot.addEventListener('pointermove', (e) => {
     if (!drag || drag.pointerId !== e.pointerId) return;
+    const { x, y } = pointerPos(e);
+    const dist = Math.hypot(x - drag.startX, y - drag.startY);
+    if (!drag.moved && dist < DRAG_THRESHOLD_PX) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      slot.style.opacity = '0.25';
+      dragGhost.innerHTML = piecePreviewHtml(drag.piece, drag.cellPx, drag.gapPx);
+      dragGhost.classList.add('active', 'ghost-lift');
+    }
     moveDragGhost(e);
     updatePlacementGhost(e);
   });
@@ -940,8 +1061,82 @@ function bindDrag(slot: HTMLDivElement, trayIndex: number): void {
   slot.addEventListener('pointercancel', (e) => onPointerEnd(e, slot));
 }
 
+function bindHoldDrag(slot: HTMLButtonElement): void {
+  slot.addEventListener('pointerdown', (e) => {
+    if (game.gameOver || !game.holdEnabled()) return;
+
+    // Tap Hold with a selected tray piece → park / swap
+    if (selectedTrayForHold !== null) {
+      e.preventDefault();
+      if (game.swapHold(selectedTrayForHold)) {
+        selectedTrayForHold = null;
+        sfx.tap();
+        hapticTap();
+        paintTray();
+        paintHold();
+        updateHud(true);
+        resetHintTimer();
+      }
+      return;
+    }
+
+    if (!game.hold) {
+      e.preventDefault();
+      showToast('Tap a tray piece, then Hold');
+      return;
+    }
+
+    e.preventDefault();
+    stopHintTimer();
+    clearHintHighlight();
+    slot.setPointerCapture(e.pointerId);
+    const piece = game.hold;
+    const { x, y } = pointerPos(e);
+    const m = boardGridMetrics();
+    const liftPx = m.pitch * 1.25;
+    drag = {
+      trayIndex: -1,
+      piece,
+      pointerId: e.pointerId,
+      cellPx: m.cellPx,
+      gapPx: m.gapPx,
+      liftPx,
+      moved: false,
+      startX: x,
+      startY: y,
+    };
+  });
+  slot.addEventListener('pointermove', (e) => {
+    if (!drag || drag.pointerId !== e.pointerId || drag.trayIndex !== -1) return;
+    const { x, y } = pointerPos(e);
+    const dist = Math.hypot(x - drag.startX, y - drag.startY);
+    if (!drag.moved && dist < DRAG_THRESHOLD_PX) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      slot.style.opacity = '0.35';
+      dragGhost.innerHTML = piecePreviewHtml(drag.piece, drag.cellPx, drag.gapPx);
+      dragGhost.classList.add('active', 'ghost-lift');
+    }
+    moveDragGhost(e);
+    updatePlacementGhost(e);
+  });
+  slot.addEventListener('pointerup', (e) => onPointerEnd(e, slot));
+  slot.addEventListener('pointercancel', (e) => onPointerEnd(e, slot));
+}
+
+function pointerOverBoard(x: number, y: number): boolean {
+  const rect = boardEl.getBoundingClientRect();
+  const pad = 12;
+  return (
+    x >= rect.left - pad &&
+    x <= rect.right + pad &&
+    y >= rect.top - pad &&
+    y <= rect.bottom + pad
+  );
+}
+
 function moveDragGhost(e: PointerEvent): void {
-  if (!drag) return;
+  if (!drag || !drag.moved) return;
   const { x, y } = pointerPos(e);
   const rect = ghostScreenRect(x, y, drag.piece, drag.cellPx, drag.gapPx, drag.liftPx);
   dragGhost.style.left = `${rect.left}px`;
@@ -949,7 +1144,7 @@ function moveDragGhost(e: PointerEvent): void {
 }
 
 function updatePlacementGhost(e: PointerEvent): void {
-  if (!drag) return;
+  if (!drag || !drag.moved) return;
   const { x, y } = pointerPos(e);
   const rect = ghostScreenRect(x, y, drag.piece, drag.cellPx, drag.gapPx, drag.liftPx);
   const naive = originFromGhostOverlay(drag.piece, rect.left, rect.top);
@@ -961,24 +1156,65 @@ function updatePlacementGhost(e: PointerEvent): void {
   highlightGhost(drag.piece, place.row, place.col, place.valid);
 }
 
-function onPointerEnd(e: PointerEvent, slot: HTMLDivElement): void {
+function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
   if (!drag || drag.pointerId !== e.pointerId) return;
   const { x, y } = pointerPos(e);
-  const rect = ghostScreenRect(x, y, drag.piece, drag.cellPx, drag.gapPx, drag.liftPx);
-  const naive = originFromGhostOverlay(drag.piece, rect.left, rect.top);
   const piece = drag.piece;
   const trayIndex = drag.trayIndex;
+  const moved = drag.moved;
   drag = null;
   dragGhost.classList.remove('active', 'ghost-lift');
   clearGhostHighlight();
   slot.style.opacity = '';
   slot.classList.remove('dragging');
 
+  // Tap (or tiny jitter): select for Hold — never auto-place
+  if (!moved) {
+    if (trayIndex >= 0 && game.holdEnabled()) {
+      selectedTrayForHold = selectedTrayForHold === trayIndex ? null : trayIndex;
+      hapticTap();
+      paintTray();
+      paintHold();
+      if (selectedTrayForHold !== null) {
+        showToast('Selected — tap Hold to park it');
+      }
+      resetHintTimer();
+      return;
+    }
+    paintTray();
+    paintHold();
+    resetHintTimer();
+    return;
+  }
+
+  // Dragged, but released away from the board → cancel (or select if still near tray)
+  if (!pointerOverBoard(x, y)) {
+    if (trayIndex >= 0 && game.holdEnabled() && y > boardEl.getBoundingClientRect().bottom) {
+      selectedTrayForHold = selectedTrayForHold === trayIndex ? null : trayIndex;
+      hapticTap();
+      paintTray();
+      paintHold();
+      if (selectedTrayForHold !== null) showToast('Selected — tap Hold to park it');
+      resetHintTimer();
+      return;
+    }
+    paintTray();
+    paintHold();
+    resetHintTimer();
+    return;
+  }
+
+  const m = boardGridMetrics();
+  const liftPx = m.pitch * 1.25;
+  const rect = ghostScreenRect(x, y, piece, m.cellPx, m.gapPx, liftPx);
+  const naive = originFromGhostOverlay(piece, rect.left, rect.top);
+
   if (!naive) {
     sfx.bad();
     hapticBad();
     shakeBoard();
     paintTray();
+    paintHold();
     resetHintTimer();
     return;
   }
@@ -989,20 +1225,26 @@ function onPointerEnd(e: PointerEvent, slot: HTMLDivElement): void {
     hapticBad();
     shakeBoard();
     paintTray();
+    paintHold();
     resetHintTimer();
     return;
   }
 
-  const result = game.tryPlace(trayIndex, place.row, place.col);
+  const result =
+    trayIndex < 0
+      ? game.tryPlaceHold(place.row, place.col)
+      : game.tryPlace(trayIndex, place.row, place.col);
   if (!result.ok) {
     sfx.bad();
     hapticBad();
     shakeBoard();
     paintTray();
+    paintHold();
     resetHintTimer();
     return;
   }
 
+  selectedTrayForHold = null;
   recordPlacement(profile, {
     combo: result.score.comboMultiplier,
     streak: result.score.streak,
@@ -1011,9 +1253,6 @@ function onPointerEnd(e: PointerEvent, slot: HTMLDivElement): void {
   });
   sessionClears = game.clearsThisGame;
   maybeCheerNewBest();
-  if (game.mode === 'classic' && game.score > profile.bestClassic) {
-    profile.bestClassic = game.score;
-  }
   saveProfile(profile);
   checkAndToastGoals();
 
@@ -1039,6 +1278,7 @@ function onPointerEnd(e: PointerEvent, slot: HTMLDivElement): void {
     setTimeout(() => {
       paintBoard();
       paintTray(result.dealt);
+      paintHold();
       if (result.dealt) sfx.refill();
       updateHud();
       if (result.gameOver) showGameOver();
@@ -1047,6 +1287,7 @@ function onPointerEnd(e: PointerEvent, slot: HTMLDivElement): void {
   } else {
     showScorePop(result.score.total, x, y);
     paintTray(result.dealt);
+    paintHold();
     if (result.dealt) sfx.refill();
     updateHud();
     if (result.gameOver) showGameOver();
@@ -1058,9 +1299,12 @@ function startFresh(): void {
   hideGameOver();
   sessionClears = 0;
   cheeredBestThisGame = false;
+  selectedTrayForHold = null;
   game.newGame();
+  displayedScore = 0;
   paintBoard();
   paintTray(true);
+  paintHold();
   updateHud(true);
   fitBoardToWrap();
   boardEl.classList.add('board-enter');
