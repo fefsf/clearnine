@@ -792,10 +792,14 @@ body {
 
 .home-screen {
   position: relative;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 0;
-  padding: 8px 2px 12px;
-  overflow: hidden;
+  padding: 4px 2px 16px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .home-atmosphere {
@@ -832,24 +836,24 @@ body {
   z-index: 1;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 8px;
   width: 100%;
-  margin-top: 0;
-  padding-top: 8px;
+  margin: auto 0;
+  padding: 4px 0 8px;
 }
 
 .home-hero {
   text-align: center;
-  margin-bottom: 8px;
+  margin-bottom: 4px;
 }
 
 .home-logo {
   display: block;
-  width: min(42vw, 168px);
+  width: min(32vw, 120px);
   height: auto;
-  margin: 4px auto 14px;
-  border-radius: 28px;
-  box-shadow: 0 12px 28px rgba(26, 36, 48, 0.16);
+  margin: 0 auto 10px;
+  border-radius: 22px;
+  box-shadow: 0 10px 22px rgba(26, 36, 48, 0.14);
   animation: logo-breathe 3.6s ease-in-out infinite;
 }
 
@@ -858,29 +862,25 @@ body {
   50% { transform: translateY(-5px); }
 }
 
-.home-kicker {
-  margin: 0;
-  font-size: 0.95rem;
-  font-weight: 700;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--text-dim);
-}
-
 .home-title {
-  margin: 2px 0 4px;
+  margin: 0;
   font-family: var(--font-display);
-  font-size: 2.55rem;
+  font-size: 2.2rem;
   font-weight: 700;
   color: var(--accent);
   letter-spacing: -0.02em;
-  line-height: 1;
+  line-height: 1.05;
+  display: flex;
+  align-items: baseline;
+  justify-content: center;
+  gap: 0.35em;
+  flex-wrap: wrap;
 }
 
 .home-title-rule {
-  width: 56px;
-  height: 4px;
-  margin: 8px auto 10px;
+  width: 48px;
+  height: 3px;
+  margin: 6px auto 8px;
   border-radius: 999px;
   background: linear-gradient(90deg, transparent, var(--accent), transparent);
 }
@@ -889,35 +889,42 @@ body {
   margin: 0;
   color: var(--text);
   font-weight: 700;
-  font-size: 1.1rem;
+  font-size: 1.05rem;
 }
 
 .home-version {
-  margin: 8px 0 0;
+  margin: 0;
   color: var(--text-dim);
-  font-size: 0.9rem;
+  font-family: var(--font-ui);
+  font-size: 0.95rem;
   font-weight: 700;
-  letter-spacing: 0.04em;
+  letter-spacing: 0.02em;
+  line-height: 1;
 }
 
 .home-screen .menu-btn {
-  min-height: 64px;
+  min-height: 58px;
+  padding: 10px 14px;
 }
 
 .home-screen .menu-btn.primary {
-  min-height: 76px;
+  min-height: 68px;
 }
 
 .home-screen .menu-btn.primary .menu-title {
-  font-size: 1.5rem;
+  font-size: 1.4rem;
 }
 
 .home-screen .menu-btn.secondary {
-  min-height: 56px;
+  min-height: 52px;
 }
 
 .home-screen .menu-title {
-  font-size: 1.2rem;
+  font-size: 1.15rem;
+}
+
+.home-screen .howto-home-btn {
+  margin-bottom: 4px;
 }
 
 .menu-btn {
@@ -1511,6 +1518,50 @@ body {
     gap: 4px;
     padding-left: 10px;
     padding-right: 10px;
+  }
+
+  .home-logo {
+    width: min(28vw, 96px);
+    margin-bottom: 6px;
+    border-radius: 18px;
+  }
+
+  .home-title {
+    font-size: 1.95rem;
+  }
+
+  .home-sub {
+    font-size: 0.98rem;
+  }
+
+  .home-content {
+    gap: 6px;
+    margin: 0;
+  }
+
+  .home-screen .menu-btn {
+    min-height: 52px;
+    padding: 8px 12px;
+  }
+
+  .home-screen .menu-btn.primary {
+    min-height: 60px;
+  }
+
+  .home-screen .menu-btn.secondary {
+    min-height: 48px;
+  }
+
+  .home-screen .menu-title {
+    font-size: 1.05rem;
+  }
+
+  .home-screen .menu-btn.primary .menu-title {
+    font-size: 1.25rem;
+  }
+
+  .menu-meta {
+    font-size: 0.82rem;
   }
 
   .play-mode {
