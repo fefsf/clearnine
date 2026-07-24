@@ -130,6 +130,26 @@ One special run each calendar day:
 
 Resume an unfinished Classic or Daily game without losing your board or score.
 
+### Expert Mode (optional)
+
+For players who already score high and want more challenge. Turn it on in **Settings → Expert Mode**. Turn it off anytime to restore the calm original game.
+
+When Expert Mode is on, the home screen also offers **How to Play Expert Mode** — a full in-app guide.
+
+| Unlocked | What it does |
+|---|---|
+| **Expert Play** | Hold slot + **rising pressure** (larger pieces show up more as your score climbs). Separate Expert best score. |
+| **Hold** | Tap a tray piece to select it, then tap **Hold** to park it. Drag from Hold onto the board to place. (Play & Weekly only.) |
+| **Expert Daily** | Harder date-seeded puzzle — denser starters and tougher deals. Separate Expert Daily best. |
+| **Weekly Challenge** | One tough seeded board for the whole week, with Hold. |
+| **Endgame Sprint** | Starts on a crowded board for short, intense runs. |
+| **Extra records** | Expert / Weekly / Endgame bests, best combo, best streak in **My Scores**. |
+| **Beat-your-best** | Target line under the scoreboard during Expert runs. |
+| **Share score** | Share or copy a short summary when a run ends. |
+| **Mastery awards** | Extra trophies (e.g. 8,000 points, Combo ×5, Weekly, Endgame). |
+
+Expert scores are tracked separately from calm-mode bests, so turning Expert off does not overwrite your original high scores.
+
 ---
 
 ## Features
@@ -139,7 +159,7 @@ Resume an unfinished Classic or Daily game without losing your board or score.
 - Original 9×9 / 3×3 clear rules
 - Wide piece catalog (1-cell through large shapes)
 - Three-piece tray with auto-refill
-- No rotation, no hold queue, no time limit
+- No rotation and no time limit (optional **Hold** in Expert Mode)
 - Game-over when no tray piece fits
 - Local save for unfinished games and best scores
 
@@ -160,12 +180,13 @@ Resume an unfinished Classic or Daily game without losing your board or score.
 - Score bar, tray, and toolbar stay visible (board scales to free space)
 - Stuck hint: after idle time, the easiest fitting piece gently glows
 - Sound and vibration toggles in **Settings**
+- **Expert Mode** toggle in Settings — harder options for skilled players; off = original calm game
 - **Check for updates** in Settings — looks up the latest GitHub release (optional; game stays offline otherwise)
 
 ### Progression (all local)
 
-- **My Scores** — best Play score, best today, daily streak, recent games, lifetime stats
-- **Awards** — trophies for scores, combos, streaks, dedication, and daily habits
+- **My Scores** — best Play score, best today, daily streak, recent games, lifetime stats (plus Expert extras when enabled)
+- **Awards** — trophies for scores, combos, streaks, dedication, daily habits, and Expert mastery
 - **Colors (Themes)** — unlockable looks (see below)
 
 ### Themes
@@ -183,10 +204,11 @@ Every theme uses a **single uniform block color** for a clean, calm look.
 
 ### Awards (examples)
 
-- Getting started · Sharp eye · Block master  
-- Triple clear · Quad blast · On a roll  
+- Getting started · Sharp eye · Block master · Untouchable  
+- Triple clear · Quad blast · Cascade king · On a roll · Unstoppable  
 - Century · Dedicated · Clean sweep · Regular  
-- Day one · Three-day rhythm · Week warrior  
+- Day one · Three-day rhythm · Week warrior · Expert day  
+- Week challenger · Crowded genius  
 
 ---
 
