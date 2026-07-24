@@ -78,7 +78,7 @@ export function renderHome(
 
         <button type="button" class="menu-btn" id="btn-daily">
           <span class="menu-title">${continueInfo?.mode === 'daily' ? 'New Today’s Puzzle' : 'Today’s Puzzle'}</span>
-          <span class="menu-meta">One special game each day · Today’s best: ${dailyBest}</span>
+          <span class="menu-meta">Seeded daily run with starter blocks · Today’s best: ${dailyBest}</span>
         </button>
 
         <div class="menu-row">

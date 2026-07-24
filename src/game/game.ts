@@ -6,6 +6,7 @@ import {
   createEmptyBoard,
   findClears,
   placePiece,
+  seedDailyStarters,
   type Board,
   type ClearResult,
 } from './board';
@@ -99,6 +100,7 @@ export class Game {
     this.clearsThisGame = 0;
     if (this.mode === 'daily') {
       this.rng = rngFromDate(this.dailyDate);
+      seedDailyStarters(this.board, () => this.rng.next());
     } else {
       this.rng = createRng((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0);
     }
