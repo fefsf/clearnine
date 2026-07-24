@@ -99,17 +99,47 @@ export const PIECE_CATALOG: PieceDef[] = [
 
 const totalWeight = PIECE_CATALOG.reduce((s, p) => s + p.weight, 0);
 
-export function pickRandomPiece(rng: () => number = Math.random): PieceDef {
-  let roll = rng() * totalWeight;
+export type DealOptions = {
+  /** Bias toward larger / awkward pieces. */
+  hard?: boolean;
+  /** Classic rising pressure — boost large pieces as score climbs. */
+  score?: number;
+};
+
+function weightFor(piece: PieceDef, opts?: DealOptions): number {
+  let w = piece.weight;
+  const size = piece.cells.length;
+  if (opts?.hard) {
+    if (size >= 5) w *= 2.4;
+    else if (size >= 4) w *= 1.8;
+    else if (size <= 2) w *= 0.55;
+  }
+  const score = opts?.score ?? 0;
+  if (score >= 1500) {
+    const tier = Math.min(4, Math.floor(score / 1500));
+    if (size >= 5) w *= 1 + tier * 0.35;
+    else if (size >= 4) w *= 1 + tier * 0.22;
+    else if (size <= 2) w *= Math.max(0.35, 1 - tier * 0.12);
+  }
+  return w;
+}
+
+export function pickRandomPiece(rng: () => number = Math.random, opts?: DealOptions): PieceDef {
+  const total = PIECE_CATALOG.reduce((s, p) => s + weightFor(p, opts), 0);
+  let roll = rng() * (total || totalWeight);
   for (const piece of PIECE_CATALOG) {
-    roll -= piece.weight;
+    roll -= weightFor(piece, opts);
     if (roll <= 0) return piece;
   }
   return PIECE_CATALOG[PIECE_CATALOG.length - 1]!;
 }
 
-export function dealTray(count = 3, rng: () => number = Math.random): PieceDef[] {
-  return Array.from({ length: count }, () => pickRandomPiece(rng));
+export function dealTray(
+  count = 3,
+  rng: () => number = Math.random,
+  opts?: DealOptions,
+): PieceDef[] {
+  return Array.from({ length: count }, () => pickRandomPiece(rng, opts));
 }
 
 /** Assign a stable color index (1–PIECE_COLORS) from piece id. */

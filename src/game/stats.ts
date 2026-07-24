@@ -1,12 +1,13 @@
 import { addDays, todayKey } from './rng';
 
-export type GameMode = 'classic' | 'daily';
+export type GameMode = 'classic' | 'daily' | 'weekly' | 'blitz';
 
 export type RecentGame = {
   mode: GameMode;
   score: number;
   date: string;
   cleared: number;
+  expert?: boolean;
 };
 
 export type LifetimeStats = {
@@ -18,11 +19,18 @@ export type LifetimeStats = {
   maxStreak: number;
   /** Dates (YYYY-MM-DD) with at least one finished Daily. */
   dailyDates: string[];
+  /** Week keys with a finished Weekly Challenge. */
+  weeklyKeys: string[];
 };
 
 export type Profile = {
   bestClassic: number;
   bestDaily: Record<string, number>;
+  /** Expert Mode highs (separate so calm mode stays untouched). */
+  bestClassicExpert: number;
+  bestDailyExpert: Record<string, number>;
+  bestWeekly: Record<string, number>;
+  bestBlitz: number;
   recentGames: RecentGame[];
   stats: LifetimeStats;
   unlockedGoals: string[];
@@ -30,6 +38,7 @@ export type Profile = {
   mute: boolean;
   haptics: boolean;
   seenTutorial: boolean;
+  expertMode: boolean;
 };
 
 const STORAGE_PROFILE = 'clearnine-profile';
@@ -45,6 +54,7 @@ export function emptyStats(): LifetimeStats {
     maxCombo: 0,
     maxStreak: 0,
     dailyDates: [],
+    weeklyKeys: [],
   };
 }
 
@@ -52,6 +62,10 @@ export function defaultProfile(): Profile {
   return {
     bestClassic: 0,
     bestDaily: {},
+    bestClassicExpert: 0,
+    bestDailyExpert: {},
+    bestWeekly: {},
+    bestBlitz: 0,
     recentGames: [],
     stats: emptyStats(),
     unlockedGoals: [],
@@ -59,6 +73,7 @@ export function defaultProfile(): Profile {
     mute: false,
     haptics: true,
     seenTutorial: false,
+    expertMode: false,
   };
 }
 
@@ -66,15 +81,20 @@ export function loadProfile(): Profile {
   try {
     const raw = localStorage.getItem(STORAGE_PROFILE);
     if (raw) {
-      const parsed = JSON.parse(raw) as Profile;
+      const parsed = JSON.parse(raw) as Partial<Profile>;
       return {
         ...defaultProfile(),
         ...parsed,
         stats: { ...emptyStats(), ...parsed.stats },
         bestDaily: parsed.bestDaily ?? {},
+        bestDailyExpert: parsed.bestDailyExpert ?? {},
+        bestWeekly: parsed.bestWeekly ?? {},
+        bestClassicExpert: parsed.bestClassicExpert ?? 0,
+        bestBlitz: parsed.bestBlitz ?? 0,
         recentGames: parsed.recentGames ?? [],
         unlockedGoals: parsed.unlockedGoals ?? [],
         haptics: parsed.haptics ?? true,
+        expertMode: parsed.expertMode ?? false,
         seenTutorial:
           typeof parsed.seenTutorial === 'boolean' ? parsed.seenTutorial : true,
       };
@@ -107,8 +127,13 @@ export function saveProfile(profile: Profile): void {
   }
 }
 
-export function getDailyBest(profile: Profile, date = todayKey()): number {
+export function getDailyBest(profile: Profile, date = todayKey(), expert = false): number {
+  if (expert) return profile.bestDailyExpert[date] ?? 0;
   return profile.bestDaily[date] ?? 0;
+}
+
+export function getWeeklyBest(profile: Profile, week: string): number {
+  return profile.bestWeekly[week] ?? 0;
 }
 
 /** Consecutive days ending today (or yesterday if today not yet played) with a Daily finish. */
@@ -151,28 +176,55 @@ export function recordGameFinished(
     score: number;
     cleared: number;
     date?: string;
+    week?: string;
+    expert?: boolean;
   },
-): { newClassicBest: boolean; newDailyBest: boolean } {
+): { newClassicBest: boolean; newDailyBest: boolean; newWeeklyBest: boolean; newBlitzBest: boolean } {
   const date = opts.date ?? todayKey();
+  const expert = opts.expert ?? false;
   profile.stats.gamesPlayed += 1;
 
   let newClassicBest = false;
   let newDailyBest = false;
+  let newWeeklyBest = false;
+  let newBlitzBest = false;
 
   if (opts.mode === 'classic') {
-    if (opts.score > profile.bestClassic) {
+    if (expert) {
+      if (opts.score > profile.bestClassicExpert) {
+        profile.bestClassicExpert = opts.score;
+        newClassicBest = true;
+      }
+    } else if (opts.score > profile.bestClassic) {
       profile.bestClassic = opts.score;
       newClassicBest = true;
     }
-  } else {
-    const prev = profile.bestDaily[date] ?? 0;
+  } else if (opts.mode === 'daily') {
+    const bag = expert ? profile.bestDailyExpert : profile.bestDaily;
+    const prev = bag[date] ?? 0;
     if (opts.score > prev) {
-      profile.bestDaily[date] = opts.score;
+      bag[date] = opts.score;
       newDailyBest = true;
     }
     if (!profile.stats.dailyDates.includes(date)) {
       profile.stats.dailyDates.push(date);
       profile.stats.dailyDates.sort();
+    }
+  } else if (opts.mode === 'weekly') {
+    const week = opts.week ?? date;
+    const prev = profile.bestWeekly[week] ?? 0;
+    if (opts.score > prev) {
+      profile.bestWeekly[week] = opts.score;
+      newWeeklyBest = true;
+    }
+    if (!profile.stats.weeklyKeys.includes(week)) {
+      profile.stats.weeklyKeys.push(week);
+      profile.stats.weeklyKeys.sort();
+    }
+  } else if (opts.mode === 'blitz') {
+    if (opts.score > profile.bestBlitz) {
+      profile.bestBlitz = opts.score;
+      newBlitzBest = true;
     }
   }
 
@@ -181,9 +233,10 @@ export function recordGameFinished(
     score: opts.score,
     date,
     cleared: opts.cleared,
+    expert,
   });
   profile.recentGames = profile.recentGames.slice(0, 20);
 
   saveProfile(profile);
-  return { newClassicBest, newDailyBest };
+  return { newClassicBest, newDailyBest, newWeeklyBest, newBlitzBest };
 }

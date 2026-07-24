@@ -94,6 +94,42 @@ export const GOALS: GoalDef[] = [
     description: 'Play Daily 7 days in a row',
     check: (p) => dailyPlayStreak(p) >= 7,
   },
+  {
+    id: 'score_8000',
+    title: 'Untouchable',
+    description: 'Score 8,000 in Classic (or Expert Play)',
+    check: (p) => p.bestClassic >= 8000 || p.bestClassicExpert >= 8000,
+  },
+  {
+    id: 'combo_5',
+    title: 'Cascade king',
+    description: 'Clear a Combo ×5 in one move',
+    check: (p) => p.stats.maxCombo >= 5,
+  },
+  {
+    id: 'streak_10',
+    title: 'Unstoppable',
+    description: 'Reach a clear streak of 10',
+    check: (p) => p.stats.maxStreak >= 10,
+  },
+  {
+    id: 'expert_daily',
+    title: 'Expert day',
+    description: 'Score 1,500 on an Expert Daily',
+    check: (p) => Object.values(p.bestDailyExpert).some((s) => s >= 1500),
+  },
+  {
+    id: 'weekly_first',
+    title: 'Week challenger',
+    description: 'Finish a Weekly Challenge',
+    check: (p) => p.stats.weeklyKeys.length >= 1,
+  },
+  {
+    id: 'blitz_800',
+    title: 'Crowded genius',
+    description: 'Score 800 in Endgame Sprint',
+    check: (p) => p.bestBlitz >= 800,
+  },
 ];
 
 /** Returns newly unlocked goal ids (also mutates profile.unlockedGoals). */

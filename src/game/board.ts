@@ -93,17 +93,30 @@ export function findNearestPlacement(
 }
 
 /**
- * Pre-fill a Daily board with a couple of small shapes (same for everyone that day).
+ * Pre-fill a Daily / Weekly board with starter shapes (same for everyone that seed).
  * Never creates an immediate clear.
  */
-export function seedDailyStarters(board: Board, next: () => number): void {
-  if (DAILY_STARTER_POOL.length === 0) return;
+export function seedDailyStarters(
+  board: Board,
+  next: () => number,
+  opts?: { expert?: boolean; dense?: boolean },
+): void {
+  const expert = opts?.expert ?? false;
+  const dense = opts?.dense ?? false;
+  const pool = dense || expert
+    ? PIECE_CATALOG.filter((p) => p.cells.length >= 2 && p.cells.length <= 5)
+    : DAILY_STARTER_POOL;
+  if (pool.length === 0) return;
 
-  const pieceCount = next() < 0.55 ? 2 : 3;
+  let pieceCount: number;
+  if (dense) pieceCount = 5 + Math.floor(next() * 3); // 5–7
+  else if (expert) pieceCount = 4 + Math.floor(next() * 2); // 4–5
+  else pieceCount = next() < 0.55 ? 2 : 3;
+
   const usedRegions = new Set<string>();
 
   for (let i = 0; i < pieceCount; i++) {
-    const piece = DAILY_STARTER_POOL[Math.floor(next() * DAILY_STARTER_POOL.length)]!;
+    const piece = pool[Math.floor(next() * pool.length)]!;
     const color = 1 + Math.floor(next() * PIECE_COLORS);
     const { rows, cols } = pieceBounds(piece.cells);
 
@@ -113,7 +126,7 @@ export function seedDailyStarters(board: Board, next: () => number): void {
       if (!canPlace(board, piece, row, col)) continue;
 
       const regionKey = `${Math.floor(row / REGION)},${Math.floor(col / REGION)}`;
-      if (usedRegions.has(regionKey) && attempt < 24) continue;
+      if (usedRegions.has(regionKey) && attempt < 24 && !dense) continue;
 
       const trial = cloneBoard(board);
       placePiece(trial, piece, row, col, color);
