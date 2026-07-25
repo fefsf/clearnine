@@ -38,3 +38,7 @@ android/local.properties
 # Local screenshots / scratch captures
 test-*.png
 
+# Local agent / machine notes (may contain private paths or workflow identity)
+HANDOFF.md
+.cursorrules
+
