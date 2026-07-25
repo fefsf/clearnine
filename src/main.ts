@@ -747,44 +747,88 @@ function playClearSweeps(clears: ClearResult): void {
   layer.className = 'sweep-layer';
   boardEl.appendChild(layer);
   const boardRect = boardEl.getBoundingClientRect();
+  let bandIndex = 0;
+
+  const addBand = (
+    className: string,
+    left: number,
+    top: number,
+    width: number,
+    height: number,
+  ): void => {
+    const band = document.createElement('div');
+    band.className = `sweep-band ${className}`;
+    band.style.left = `${left}px`;
+    band.style.top = `${top}px`;
+    band.style.width = `${width}px`;
+    band.style.height = `${height}px`;
+    band.style.animationDelay = `${bandIndex * 45}ms`;
+    layer.appendChild(band);
+    bandIndex += 1;
+  };
 
   for (const r of clears.rows) {
     const a = cellAt(r, 0).getBoundingClientRect();
     const b = cellAt(r, BOARD_SIZE - 1).getBoundingClientRect();
-    const band = document.createElement('div');
-    band.className = 'sweep-band sweep-row';
-    band.style.left = `${a.left - boardRect.left}px`;
-    band.style.top = `${a.top - boardRect.top}px`;
-    band.style.width = `${b.right - a.left}px`;
-    band.style.height = `${a.height}px`;
-    layer.appendChild(band);
+    addBand(
+      'sweep-row',
+      a.left - boardRect.left,
+      a.top - boardRect.top,
+      b.right - a.left,
+      a.height,
+    );
   }
 
   for (const c of clears.cols) {
     const a = cellAt(0, c).getBoundingClientRect();
     const b = cellAt(BOARD_SIZE - 1, c).getBoundingClientRect();
-    const band = document.createElement('div');
-    band.className = 'sweep-band sweep-col';
-    band.style.left = `${a.left - boardRect.left}px`;
-    band.style.top = `${a.top - boardRect.top}px`;
-    band.style.width = `${a.width}px`;
-    band.style.height = `${b.bottom - a.top}px`;
-    layer.appendChild(band);
+    addBand(
+      'sweep-col',
+      a.left - boardRect.left,
+      a.top - boardRect.top,
+      a.width,
+      b.bottom - a.top,
+    );
   }
 
   for (const { br, bc } of clears.regions) {
     const a = cellAt(br * REGION, bc * REGION).getBoundingClientRect();
-    const b = cellAt(br * REGION + REGION - 1, bc * REGION + REGION - 1).getBoundingClientRect();
-    const band = document.createElement('div');
-    band.className = 'sweep-band sweep-box';
-    band.style.left = `${a.left - boardRect.left}px`;
-    band.style.top = `${a.top - boardRect.top}px`;
-    band.style.width = `${b.right - a.left}px`;
-    band.style.height = `${b.bottom - a.top}px`;
-    layer.appendChild(band);
+    const b = cellAt(
+      br * REGION + REGION - 1,
+      bc * REGION + REGION - 1,
+    ).getBoundingClientRect();
+    addBand(
+      'sweep-box',
+      a.left - boardRect.left,
+      a.top - boardRect.top,
+      b.right - a.left,
+      b.bottom - a.top,
+    );
   }
 
-  setTimeout(() => layer.remove(), 480);
+  setTimeout(() => layer.remove(), 560 + bandIndex * 45);
+}
+
+/** Cascade clear cells from centroid outward (ms delay per cell). */
+function clearCascadeDelays(
+  cellsList: { r: number; c: number }[],
+): Map<string, number> {
+  const delays = new Map<string, number>();
+  if (cellsList.length === 0) return delays;
+  const cr =
+    cellsList.reduce((s, x) => s + x.r, 0) / cellsList.length;
+  const cc =
+    cellsList.reduce((s, x) => s + x.c, 0) / cellsList.length;
+  let maxDist = 0.001;
+  const dists = cellsList.map(({ r, c }) => {
+    const d = Math.hypot(r - cr, c - cc);
+    maxDist = Math.max(maxDist, d);
+    return d;
+  });
+  cellsList.forEach(({ r, c }, i) => {
+    delays.set(`${r},${c}`, Math.round((dists[i]! / maxDist) * 240));
+  });
+  return delays;
 }
 
 function spawnConfetti(): void {
@@ -813,19 +857,59 @@ function shakeBoard(): void {
 }
 
 function landPiece(piece: PieceDef, row: number, col: number): void {
+  const n = cellCount(piece.cells);
+  const weight = n <= 1 ? 'land-light' : n >= 5 ? 'land-heavy' : 'land-mid';
   for (const { r, c } of piece.cells) {
     const cell = cellAt(row + r, col + c);
-    cell.classList.remove('land-pop');
+    cell.classList.remove('land-pop', 'land-light', 'land-mid', 'land-heavy');
     void cell.offsetWidth;
-    cell.classList.add('land-pop');
+    cell.classList.add('land-pop', weight);
+  }
+}
+
+let weatherFadeTimer: ReturnType<typeof setTimeout> | null = null;
+
+function syncBoardWeather(combo: number, streak: number, cleared: boolean): void {
+  if (weatherFadeTimer) {
+    clearTimeout(weatherFadeTimer);
+    weatherFadeTimer = null;
+  }
+  boardEl.classList.remove(
+    'weather-combo-2',
+    'weather-combo-3',
+    'weather-streak',
+    'board-combo-flash',
+    'board-streak-ring',
+  );
+  if (!cleared) return;
+
+  if (combo >= 3) boardEl.classList.add('weather-combo-3');
+  else if (combo >= 2) boardEl.classList.add('weather-combo-2');
+  if (streak >= 2) boardEl.classList.add('weather-streak');
+
+  // Flash vignette / ring briefly; keep ambient weather while streak lives
+  void boardEl.offsetWidth;
+  if (combo >= 2) boardEl.classList.add('board-combo-flash');
+  if (streak >= 2) boardEl.classList.add('board-streak-ring');
+  setTimeout(() => {
+    boardEl.classList.remove('board-combo-flash', 'board-streak-ring');
+  }, 700);
+
+  if (streak < 2) {
+    weatherFadeTimer = setTimeout(() => {
+      boardEl.classList.remove('weather-combo-2', 'weather-combo-3');
+      weatherFadeTimer = null;
+    }, 1200);
   }
 }
 
 function flashBanners(combo: number, streak: number, cleared: boolean): void {
-  if (!cleared) return;
+  if (!cleared) {
+    syncBoardWeather(0, 0, false);
+    return;
+  }
 
-  boardEl.classList.remove('board-combo-flash', 'board-streak-ring');
-  void boardEl.offsetWidth;
+  syncBoardWeather(combo, streak, true);
 
   if (combo >= 2) {
     comboBanner.textContent = `Combo ×${combo}!`;
@@ -833,7 +917,6 @@ function flashBanners(combo: number, streak: number, cleared: boolean): void {
     void comboBanner.offsetWidth;
     comboBanner.classList.add('show');
     if (combo >= 3) comboBanner.classList.add('combo-big');
-    boardEl.classList.add('board-combo-flash');
     flashCelebrate(combo >= 3 ? 'Amazing!' : 'Nice!');
   } else {
     flashCelebrate('Nice!');
@@ -844,12 +927,7 @@ function flashBanners(combo: number, streak: number, cleared: boolean): void {
     streakBanner.classList.remove('show');
     void streakBanner.offsetWidth;
     streakBanner.classList.add('show');
-    boardEl.classList.add('board-streak-ring');
   }
-
-  setTimeout(() => {
-    boardEl.classList.remove('board-combo-flash', 'board-streak-ring');
-  }, 700);
 }
 
 function showScorePop(points: number, clientX: number, clientY: number): void {
@@ -865,8 +943,9 @@ function showScorePop(points: number, clientX: number, clientY: number): void {
 
 function clearGhostHighlight(): void {
   for (const cell of cells) {
-    cell.classList.remove('ghost-ok', 'ghost-bad');
+    cell.classList.remove('ghost-ok', 'ghost-bad', 'ghost-snap');
   }
+  dragGhost.classList.remove('ghost-valid', 'ghost-invalid');
 }
 
 function highlightGhost(
@@ -876,11 +955,14 @@ function highlightGhost(
   valid: boolean,
 ): void {
   clearGhostHighlight();
+  dragGhost.classList.add(valid ? 'ghost-valid' : 'ghost-invalid');
   for (const { r, c } of piece.cells) {
     const br = row + r;
     const bc = col + c;
     if (br < 0 || br >= BOARD_SIZE || bc < 0 || bc >= BOARD_SIZE) continue;
-    cellAt(br, bc).classList.add(valid ? 'ghost-ok' : 'ghost-bad');
+    const cell = cellAt(br, bc);
+    cell.classList.add(valid ? 'ghost-ok' : 'ghost-bad');
+    if (valid) cell.classList.add('ghost-snap');
   }
 }
 
@@ -901,6 +983,21 @@ type DragState = {
 const DRAG_THRESHOLD_PX = 18;
 
 let drag: DragState | null = null;
+let lastTrailAt = 0;
+
+function spawnDragTrail(left: number, top: number, width: number, height: number): void {
+  const now = performance.now();
+  if (now - lastTrailAt < 42) return;
+  lastTrailAt = now;
+  const crumb = document.createElement('div');
+  crumb.className = 'drag-trail';
+  crumb.style.left = `${left + width / 2}px`;
+  crumb.style.top = `${top + height / 2}px`;
+  crumb.style.width = `${Math.max(10, width * 0.22)}px`;
+  crumb.style.height = `${Math.max(10, height * 0.22)}px`;
+  document.body.appendChild(crumb);
+  setTimeout(() => crumb.remove(), 320);
+}
 
 function pointerPos(e: PointerEvent): { x: number; y: number } {
   return { x: e.clientX, y: e.clientY };
@@ -1147,6 +1244,7 @@ function moveDragGhost(e: PointerEvent): void {
   const rect = ghostScreenRect(x, y, drag.piece, drag.cellPx, drag.gapPx, drag.liftPx);
   dragGhost.style.left = `${rect.left}px`;
   dragGhost.style.top = `${rect.top}px`;
+  spawnDragTrail(rect.left, rect.top, rect.width, rect.height);
 }
 
 function updatePlacementGhost(e: PointerEvent): void {
@@ -1169,8 +1267,9 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
   const trayIndex = drag.trayIndex;
   const moved = drag.moved;
   drag = null;
-  dragGhost.classList.remove('active', 'ghost-lift');
+  dragGhost.classList.remove('active', 'ghost-lift', 'ghost-valid', 'ghost-invalid');
   clearGhostHighlight();
+  lastTrailAt = 0;
   slot.style.opacity = '';
   slot.classList.remove('dragging');
 
@@ -1252,9 +1351,14 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
 
   if (result.clears.clearCount > 0) {
     playClearSweeps(result.clears);
+    const delays = clearCascadeDelays(result.clears.cells);
+    let maxDelay = 0;
     for (const { r, c } of result.clears.cells) {
       const cell = cellAt(r, c);
+      const delay = delays.get(`${r},${c}`) ?? 0;
+      maxDelay = Math.max(maxDelay, delay);
       cell.classList.add('flash-clear', 'clearing');
+      cell.style.animationDelay = `${delay}ms`;
     }
     spawnClearSparks(result.clears.cells);
     sfx.clear(result.score.comboMultiplier);
@@ -1264,6 +1368,9 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
     showScorePop(result.score.total, x, y);
 
     setTimeout(() => {
+      for (const cell of cells) {
+        cell.style.animationDelay = '';
+      }
       paintBoard();
       paintTray(result.dealt);
       paintHold();
@@ -1271,8 +1378,9 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
       updateHud();
       if (result.gameOver) showGameOver();
       else resetHintTimer();
-    }, 420);
+    }, 420 + maxDelay);
   } else {
+    syncBoardWeather(0, 0, false);
     showScorePop(result.score.total, x, y);
     paintTray(result.dealt);
     paintHold();

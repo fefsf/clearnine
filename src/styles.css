@@ -162,6 +162,49 @@ body {
   position: relative;
   overflow: hidden;
   flex-shrink: 1;
+  transition:
+    box-shadow 0.45s ease,
+    filter 0.45s ease,
+    background 0.45s ease;
+}
+
+/* Soft theme surface texture sitting under the cells */
+.board::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  pointer-events: none;
+  z-index: 0;
+  opacity: 0.55;
+  background:
+    radial-gradient(ellipse 80% 60% at 20% 15%, color-mix(in srgb, white 18%, transparent), transparent 55%),
+    radial-gradient(ellipse 70% 50% at 85% 80%, color-mix(in srgb, black 8%, transparent), transparent 50%);
+}
+
+/* Combo weather — ambient board mood */
+.board.weather-combo-2 {
+  filter: saturate(1.08) brightness(1.03);
+  box-shadow:
+    var(--shadow),
+    inset 0 2px 0 color-mix(in srgb, white 18%, transparent),
+    inset 0 -6px 14px color-mix(in srgb, black 12%, transparent),
+    0 0 28px color-mix(in srgb, var(--accent-warm) 22%, transparent);
+}
+
+.board.weather-combo-3 {
+  filter: saturate(1.14) brightness(1.05);
+  box-shadow:
+    var(--shadow),
+    inset 0 2px 0 color-mix(in srgb, white 22%, transparent),
+    inset 0 -6px 14px color-mix(in srgb, black 10%, transparent),
+    0 0 36px color-mix(in srgb, var(--accent-warm) 32%, transparent);
+}
+
+.board.weather-streak {
+  background:
+    radial-gradient(ellipse 90% 70% at 50% 40%, color-mix(in srgb, var(--accent-warm) 14%, transparent), transparent 65%),
+    linear-gradient(145deg, color-mix(in srgb, var(--panel) 88%, white), var(--panel));
 }
 
 .board.board-enter {
@@ -198,6 +241,7 @@ body {
   border-radius: var(--cell-radius);
   background: var(--cell-empty);
   position: relative;
+  z-index: 1;
   min-width: 0;
   min-height: 0;
   box-shadow: inset 0 1px 2px color-mix(in srgb, black 10%, transparent);
@@ -245,32 +289,79 @@ body {
 .cell.filled-8 { background: linear-gradient(160deg, color-mix(in srgb, var(--c8) 82%, white), var(--c8)); }
 
 .cell.land-pop {
-  animation: land-pop 0.28s ease-out;
+  animation: land-pop-mid 0.3s ease-out;
 }
 
-@keyframes land-pop {
-  0% { transform: scale(1.18); filter: brightness(1.25); }
-  60% { transform: scale(0.94); }
+.cell.land-pop.land-light {
+  animation: land-pop-light 0.24s ease-out;
+}
+
+.cell.land-pop.land-mid {
+  animation: land-pop-mid 0.3s ease-out;
+}
+
+.cell.land-pop.land-heavy {
+  animation: land-pop-heavy 0.38s cubic-bezier(0.22, 1.2, 0.36, 1);
+}
+
+@keyframes land-pop-light {
+  0% { transform: scale(1.1); filter: brightness(1.12); }
+  55% { transform: scale(0.97); }
+  100% { transform: scale(1); filter: none; }
+}
+
+@keyframes land-pop-mid {
+  0% { transform: scale(1.18); filter: brightness(1.22); }
+  55% { transform: scale(0.93); }
+  78% { transform: scale(1.03); }
+  100% { transform: scale(1); filter: none; }
+}
+
+@keyframes land-pop-heavy {
+  0% { transform: scale(1.28) translateY(-3px); filter: brightness(1.3); }
+  45% { transform: scale(0.88) translateY(2px); }
+  70% { transform: scale(1.05) translateY(0); }
   100% { transform: scale(1); filter: none; }
 }
 
 .cell.ghost-ok {
   background:
-    linear-gradient(160deg, color-mix(in srgb, var(--accent) 70%, white), color-mix(in srgb, var(--accent) 55%, var(--cell-empty)));
-  outline: 3px solid var(--accent);
-  outline-offset: -3px;
+    linear-gradient(160deg, color-mix(in srgb, var(--accent) 62%, white), color-mix(in srgb, var(--accent) 42%, var(--cell-empty)));
+  outline: 2px solid color-mix(in srgb, var(--accent) 75%, white);
+  outline-offset: -2px;
   box-shadow:
-    inset 0 2px 0 color-mix(in srgb, white 40%, transparent),
-    0 0 10px color-mix(in srgb, var(--accent) 45%, transparent);
-  transform: scale(0.96);
+    inset 0 2px 0 color-mix(in srgb, white 45%, transparent),
+    0 0 0 1px color-mix(in srgb, var(--accent) 35%, transparent),
+    0 0 14px color-mix(in srgb, var(--accent) 40%, transparent);
+  transform: scale(0.97);
+}
+
+.cell.ghost-ok.ghost-snap {
+  animation: ghost-snap-glow 0.55s ease-out infinite alternate;
+}
+
+@keyframes ghost-snap-glow {
+  from {
+    box-shadow:
+      inset 0 2px 0 color-mix(in srgb, white 45%, transparent),
+      0 0 0 1px color-mix(in srgb, var(--accent) 30%, transparent),
+      0 0 10px color-mix(in srgb, var(--accent) 28%, transparent);
+  }
+  to {
+    box-shadow:
+      inset 0 2px 0 color-mix(in srgb, white 55%, transparent),
+      0 0 0 2px color-mix(in srgb, var(--accent) 55%, transparent),
+      0 0 18px color-mix(in srgb, var(--accent) 48%, transparent);
+  }
 }
 
 .cell.ghost-bad {
-  background: color-mix(in srgb, var(--danger) 42%, var(--cell-empty));
-  outline: 2px solid color-mix(in srgb, var(--danger) 70%, transparent);
+  background: color-mix(in srgb, var(--danger) 38%, var(--cell-empty));
+  outline: 2px solid color-mix(in srgb, var(--danger) 65%, transparent);
   outline-offset: -2px;
-  transform: scale(0.92);
-  opacity: 0.9;
+  transform: scale(0.93);
+  opacity: 0.88;
+  filter: saturate(0.85);
 }
 
 .cell.flash-clear,
@@ -282,7 +373,8 @@ body {
 }
 
 .cell.clearing {
-  animation: pop-clear 0.38s ease-out forwards;
+  animation: pop-clear 0.42s ease-out forwards;
+  animation-fill-mode: both;
 }
 
 @keyframes pop-clear {
@@ -328,6 +420,7 @@ body {
   position: absolute;
   border-radius: 6px;
   pointer-events: none;
+  animation-fill-mode: both;
 }
 
 .sweep-row {
@@ -564,14 +657,30 @@ body {
   top: 0;
   pointer-events: none;
   z-index: 100;
-  opacity: 0.92;
-  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.4));
+  opacity: 0.78;
+  filter: drop-shadow(0 12px 20px rgba(0, 0, 0, 0.35));
   transform: none;
   display: none;
+  transition: opacity 0.12s ease, filter 0.12s ease;
 }
 
 .drag-ghost.active {
   display: block;
+}
+
+.drag-ghost.ghost-valid {
+  opacity: 0.88;
+  filter:
+    drop-shadow(0 12px 18px rgba(0, 0, 0, 0.32))
+    drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 35%, transparent));
+}
+
+.drag-ghost.ghost-invalid {
+  opacity: 0.55;
+  filter:
+    drop-shadow(0 10px 14px rgba(0, 0, 0, 0.28))
+    saturate(0.55)
+    brightness(0.92);
 }
 
 .drag-ghost.ghost-lift {
@@ -579,8 +688,25 @@ body {
 }
 
 @keyframes ghost-lift-in {
-  from { transform: scale(0.9); opacity: 0.5; }
-  to { transform: scale(1); opacity: 0.92; }
+  from { transform: scale(0.9); opacity: 0.45; }
+  to { transform: scale(1); opacity: 0.78; }
+}
+
+.drag-trail {
+  position: fixed;
+  margin: 0;
+  border-radius: 50%;
+  pointer-events: none;
+  z-index: 99;
+  background: color-mix(in srgb, var(--accent) 35%, transparent);
+  box-shadow: 0 0 10px color-mix(in srgb, var(--accent) 25%, transparent);
+  transform: translate(-50%, -50%);
+  animation: trail-fade 0.3s ease-out forwards;
+}
+
+@keyframes trail-fade {
+  from { opacity: 0.55; transform: translate(-50%, -50%) scale(1); }
+  to { opacity: 0; transform: translate(-50%, -50%) scale(0.35); }
 }
 
 .tray-slot.dragging {
@@ -817,18 +943,18 @@ body {
   border-radius: 8px;
   background: color-mix(in srgb, var(--accent) 22%, transparent);
   box-shadow: inset 0 2px 0 color-mix(in srgb, white 30%, transparent);
-  animation: float-drift 9s ease-in-out infinite;
+  animation: float-drift 14s ease-in-out infinite;
 }
 
 .float-block.fb1 { left: 8%; top: 12%; animation-delay: 0s; width: 22px; height: 22px; }
-.float-block.fb2 { right: 10%; top: 18%; animation-delay: -2s; width: 34px; height: 18px; }
-.float-block.fb3 { left: 14%; top: 38%; animation-delay: -4s; width: 18px; height: 36px; opacity: 0.7; }
-.float-block.fb4 { right: 16%; top: 42%; animation-delay: -1.5s; width: 26px; height: 26px; }
-.float-block.fb5 { left: 42%; top: 8%; animation-delay: -3s; width: 20px; height: 20px; opacity: 0.55; }
+.float-block.fb2 { right: 10%; top: 18%; animation-delay: -3s; width: 34px; height: 18px; }
+.float-block.fb3 { left: 14%; top: 38%; animation-delay: -6s; width: 18px; height: 36px; opacity: 0.7; }
+.float-block.fb4 { right: 16%; top: 42%; animation-delay: -2.5s; width: 26px; height: 26px; }
+.float-block.fb5 { left: 42%; top: 8%; animation-delay: -5s; width: 20px; height: 20px; opacity: 0.55; }
 
 @keyframes float-drift {
   0%, 100% { transform: translateY(0) rotate(0deg); }
-  50% { transform: translateY(-14px) rotate(6deg); }
+  50% { transform: translateY(-10px) rotate(4deg); }
 }
 
 .home-content {
@@ -854,12 +980,12 @@ body {
   margin: 0 auto 10px;
   border-radius: 22px;
   box-shadow: 0 10px 22px rgba(26, 36, 48, 0.14);
-  animation: logo-breathe 3.6s ease-in-out infinite;
+  animation: logo-breathe 5.4s ease-in-out infinite;
 }
 
 @keyframes logo-breathe {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-5px); }
+  0%, 100% { transform: translateY(0) scale(1); }
+  50% { transform: translateY(-4px) scale(1.02); }
 }
 
 .home-title {
@@ -1081,6 +1207,34 @@ body {
   color: var(--btn-text, #0f2430);
   border-color: transparent;
   box-shadow: 0 5px 0 color-mix(in srgb, var(--accent) 50%, black);
+  position: relative;
+  overflow: hidden;
+}
+
+.menu-btn.primary::after {
+  content: '';
+  position: absolute;
+  inset: -40% -60%;
+  background: linear-gradient(
+    115deg,
+    transparent 35%,
+    color-mix(in srgb, white 30%, transparent) 50%,
+    transparent 65%
+  );
+  transform: translateX(-120%);
+  animation: cta-shimmer 5.5s ease-in-out infinite;
+  pointer-events: none;
+}
+
+@keyframes cta-shimmer {
+  0%, 72%, 100% { transform: translateX(-120%); }
+  82% { transform: translateX(120%); }
+}
+
+.menu-btn.primary .menu-title,
+.menu-btn.primary .menu-meta {
+  position: relative;
+  z-index: 1;
 }
 
 .menu-btn.secondary {
@@ -1659,6 +1813,72 @@ body {
     );
 }
 
+/* Theme board depth — paper / marble / dusk overlays */
+[data-theme='minimalist'] .board::before {
+  opacity: 0.7;
+  background:
+    repeating-linear-gradient(
+      0deg,
+      transparent 0 3px,
+      color-mix(in srgb, black 2.5%, transparent) 3px 4px
+    ),
+    repeating-linear-gradient(
+      90deg,
+      transparent 0 5px,
+      color-mix(in srgb, black 1.8%, transparent) 5px 6px
+    ),
+    radial-gradient(ellipse 70% 50% at 30% 20%, color-mix(in srgb, white 22%, transparent), transparent 60%);
+}
+
+[data-theme='ocean'] .board::before {
+  opacity: 0.65;
+  background:
+    radial-gradient(circle at 18% 22%, color-mix(in srgb, white 16%, transparent), transparent 42%),
+    radial-gradient(circle at 78% 68%, color-mix(in srgb, black 14%, transparent), transparent 48%),
+    radial-gradient(circle at 52% 40%, color-mix(in srgb, var(--accent) 12%, transparent), transparent 55%),
+    linear-gradient(135deg, color-mix(in srgb, white 8%, transparent), transparent 40%);
+}
+
+[data-theme='sunset'] .board::before {
+  opacity: 0.7;
+  background:
+    linear-gradient(180deg, color-mix(in srgb, var(--accent-warm) 18%, transparent), transparent 45%),
+    linear-gradient(0deg, color-mix(in srgb, #4a1a28 22%, transparent), transparent 40%),
+    radial-gradient(ellipse 90% 50% at 50% -10%, color-mix(in srgb, var(--accent) 28%, transparent), transparent 55%);
+}
+
+[data-theme='forest'] .board::before {
+  opacity: 0.6;
+  background:
+    repeating-linear-gradient(
+      118deg,
+      transparent 0 6px,
+      color-mix(in srgb, black 5%, transparent) 6px 7px
+    ),
+    radial-gradient(ellipse 80% 60% at 70% 20%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 50%);
+}
+
+[data-theme='midnight'] .board::before {
+  opacity: 0.75;
+  background:
+    radial-gradient(circle at 22% 18%, color-mix(in srgb, white 10%, transparent) 0 1px, transparent 2px),
+    radial-gradient(circle at 68% 32%, color-mix(in srgb, white 8%, transparent) 0 1px, transparent 2px),
+    radial-gradient(circle at 44% 72%, color-mix(in srgb, white 7%, transparent) 0 1px, transparent 2px),
+    radial-gradient(ellipse 80% 55% at 50% 0%, color-mix(in srgb, var(--accent) 16%, transparent), transparent 60%),
+    linear-gradient(160deg, color-mix(in srgb, white 5%, transparent), transparent 45%);
+}
+
+[data-theme='wood'] .board::before {
+  opacity: 0.45;
+  background:
+    repeating-linear-gradient(
+      98deg,
+      transparent 0 4px,
+      color-mix(in srgb, black 8%, transparent) 4px 5px
+    ),
+    radial-gradient(ellipse 70% 50% at 40% 30%, color-mix(in srgb, white 10%, transparent), transparent 55%);
+}
+
 [data-theme='wood'] .cell.filled-1,
 [data-theme='wood'] .cell.filled-2,
 [data-theme='wood'] .cell.filled-3,
@@ -1805,6 +2025,31 @@ body {
   .streak-banner,
   .celebrate-banner {
     font-size: 1.35rem !important;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .home-logo,
+  .float-block,
+  .menu-btn.primary::after,
+  .cell.ghost-ok.ghost-snap,
+  .drag-trail,
+  .cell.land-pop,
+  .cell.clearing,
+  .sweep-band,
+  .spark {
+    animation: none !important;
+  }
+
+  .board.weather-combo-2,
+  .board.weather-combo-3,
+  .board.weather-streak {
+    filter: none;
+    transition: none;
+  }
+
+  .drag-ghost {
+    transition: none;
   }
 }
 
