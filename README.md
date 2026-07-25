@@ -20,9 +20,25 @@
 <p align="center">
   <a href="https://github.com/fefsf/clearnine/releases/latest"><strong>⬇ Download the latest APK</strong></a>
   ·
+  <a href="#screenshots"><strong>Screenshots</strong></a>
+  ·
   <a href="#how-to-play"><strong>How to play</strong></a>
   ·
   <a href="#features"><strong>Features</strong></a>
+</p>
+
+---
+
+## Screenshots
+
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="ClearNine home screen" width="280" />
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/play.png" alt="ClearNine Today’s Puzzle gameplay" width="280" />
+</p>
+
+<p align="center">
+  <em>Home · Today’s Puzzle</em>
 </p>
 
 ---
