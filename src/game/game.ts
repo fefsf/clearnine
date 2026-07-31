@@ -10,7 +10,7 @@ import {
   type Board,
   type ClearResult,
 } from './board';
-import { weekKey } from './expert';
+import { getWeeklyMandate, weekKey, type WeeklyMandate } from './expert';
 import {
   colorForPiece,
   dealTray,
@@ -75,10 +75,11 @@ const SAVE_WEEKLY = 'clearnine-save-weekly';
 const SAVE_BLITZ = 'clearnine-save-blitz';
 const LEGACY_SAVE = 'clearnine-save';
 
-function maxUndos(mode: GameMode): number {
+function maxUndos(mode: GameMode, mandate?: WeeklyMandate | null): number {
   if (mode === 'classic') return 3;
   if (mode === 'blitz') return 1;
-  return 1; // daily / weekly
+  if (mode === 'weekly' && mandate) return mandate.undos;
+  return 1; // daily / weekly default
 }
 
 function saveKey(mode: GameMode): string {
@@ -121,14 +122,32 @@ export class Game {
     return this.dailyDate;
   }
 
+  weeklyMandate(): WeeklyMandate | null {
+    if (this.mode !== 'weekly') return null;
+    return getWeeklyMandate(this.weekId);
+  }
+
   holdEnabled(): boolean {
-    return this.expert && (this.mode === 'classic' || this.mode === 'weekly');
+    if (!this.expert) return false;
+    if (this.mode === 'classic') return true;
+    if (this.mode === 'weekly') {
+      return this.weeklyMandate()?.hold ?? true;
+    }
+    return false;
   }
 
   private dealOpts(): DealOptions | undefined {
     if (!this.expert) return undefined;
     if (this.mode === 'classic') return { hard: true, score: this.score };
-    if (this.mode === 'daily' || this.mode === 'weekly' || this.mode === 'blitz') {
+    if (this.mode === 'weekly') {
+      const m = this.weeklyMandate();
+      if (!m) return { hard: true };
+      if (m.dealBias === 'giants') return { bias: 'giants', hard: true };
+      if (m.dealBias === 'small') return { bias: 'small' };
+      if (m.dealBias === 'rising') return { hard: true, score: this.score };
+      return { hard: true };
+    }
+    if (this.mode === 'daily' || this.mode === 'blitz') {
       return { hard: true };
     }
     return undefined;
@@ -143,7 +162,8 @@ export class Game {
     this.score = 0;
     this.streak = 0;
     this.gameOver = false;
-    this.undosLeft = maxUndos(this.mode);
+    const mandate = this.weeklyMandate();
+    this.undosLeft = maxUndos(this.mode, mandate);
     this.undoStack = [];
     this.clearsThisGame = 0;
     this.hold = null;
@@ -154,7 +174,8 @@ export class Game {
       seedDailyStarters(this.board, () => this.rng.next(), { expert: this.expert });
     } else if (this.mode === 'weekly') {
       this.rng = rngFromDate(`weekly-${this.weekId}`);
-      seedDailyStarters(this.board, () => this.rng.next(), { expert: true, dense: true });
+      const dense = mandate?.dense ?? true;
+      seedDailyStarters(this.board, () => this.rng.next(), { expert: true, dense });
     } else if (this.mode === 'blitz') {
       this.rng = createRng((Date.now() ^ (Math.random() * 0xffffffff)) >>> 0);
       seedDailyStarters(this.board, () => this.rng.next(), { dense: true });

@@ -1,6 +1,6 @@
 import { BOARD_SIZE, REGION, findNearestPlacement, pieceFitsAnywhere, type ClearResult } from './game/board';
 import { findContinueGame, Game } from './game/game';
-import { weekKey } from './game/expert';
+import { getWeeklyMandate, weekKey } from './game/expert';
 import { evaluateGoals } from './game/goals';
 import { cellCount, colorForPiece, pieceBounds, type PieceDef } from './game/pieces';
 import { todayKey } from './game/rng';
@@ -65,7 +65,10 @@ let scoreAnim: number | null = null;
 
 function modeTitle(mode: GameMode): string {
   if (mode === 'daily') return game.expert ? 'Expert Daily' : 'Today’s Puzzle';
-  if (mode === 'weekly') return 'Weekly Challenge';
+  if (mode === 'weekly') {
+    const name = game.weeklyMandate()?.name ?? getWeeklyMandate(weekKey()).name;
+    return `Weekly · ${name}`;
+  }
   if (mode === 'blitz') return 'Endgame Sprint';
   return game.expert ? 'Expert Play' : 'Play';
 }
@@ -144,7 +147,7 @@ async function beginMode(mode: GameMode): Promise<void> {
       mode === 'daily'
         ? 'Start a brand new Today’s Puzzle? Your current puzzle will be cleared.'
         : mode === 'weekly'
-          ? 'Start a brand new Weekly Challenge? Your current board will be cleared.'
+          ? `Start a brand new Weekly Mandate (${getWeeklyMandate(weekKey()).name})? Your current board will be cleared.`
           : 'Start a brand new game? Your current board will be cleared.',
     );
     if (!ok) return;
@@ -155,38 +158,46 @@ async function beginMode(mode: GameMode): Promise<void> {
 function showHome(): void {
   stopHintTimer();
   teardownPlayLayout();
+  teardownHomeLayout();
   profile = loadProfile();
   transitionScreen(app, () => {
     renderHome(app, profile, handlers, findContinueGame(profile.expertMode));
+    setupHomeLayout();
   });
 }
 
 function showRecords(): void {
+  teardownHomeLayout();
   profile = loadProfile();
   transitionScreen(app, () => renderRecords(app, profile, handlers));
 }
 
 function showGoals(): void {
+  teardownHomeLayout();
   profile = loadProfile();
   transitionScreen(app, () => renderGoals(app, profile, handlers));
 }
 
 function showThemes(): void {
+  teardownHomeLayout();
   profile = loadProfile();
   transitionScreen(app, () => renderThemes(app, profile, handlers));
 }
 
 function showSettings(): void {
+  teardownHomeLayout();
   profile = loadProfile();
   transitionScreen(app, () => renderSettings(app, profile, handlers));
 }
 
 function showHowTo(): void {
+  teardownHomeLayout();
   profile = loadProfile();
   transitionScreen(app, () => renderHowTo(app, handlers, profile.expertMode));
 }
 
 function startPlay(mode: GameMode, resume: boolean): void {
+  teardownHomeLayout();
   sessionClears = 0;
   cheeredBestThisGame = false;
   game.configure(mode, {
@@ -315,6 +326,74 @@ function fitBoardToWrap(): void {
   boardEl.style.height = `${size}px`;
   boardEl.style.maxWidth = '100%';
   boardEl.style.maxHeight = '100%';
+}
+
+let homeLayoutActive = false;
+
+function setupHomeLayout(): void {
+  homeLayoutActive = true;
+  requestAnimationFrame(() => {
+    requestAnimationFrame(() => fitHomeLayout());
+  });
+  window.addEventListener('resize', fitHomeLayout);
+  window.visualViewport?.addEventListener('resize', fitHomeLayout);
+}
+
+function teardownHomeLayout(): void {
+  if (!homeLayoutActive) return;
+  homeLayoutActive = false;
+  window.removeEventListener('resize', fitHomeLayout);
+  window.visualViewport?.removeEventListener('resize', fitHomeLayout);
+}
+
+/**
+ * Scale home chrome via --home-d so the full menu fits without scrolling.
+ * Standard starts roomier; Expert starts tighter; both clamp to viewport.
+ */
+function fitHomeLayout(): void {
+  if (!homeLayoutActive) return;
+  const screen = app.querySelector<HTMLElement>('.home-screen');
+  const content = app.querySelector<HTMLElement>('.home-content');
+  if (!screen || !content) return;
+
+  const expert = screen.dataset.mode === 'expert';
+  const base = expert ? 0.94 : 1.06;
+  const minD = 0.72;
+  const maxD = expert ? 1.02 : 1.12;
+  const margin = 6;
+
+  const fits = (d: number): boolean => {
+    screen.style.setProperty('--home-d', d.toFixed(3));
+    return content.scrollHeight <= screen.clientHeight - margin;
+  };
+
+  if (fits(base)) {
+    // Grow toward maxD while it still fits (use spare height on tall phones).
+    let lo = base;
+    let hi = maxD;
+    for (let i = 0; i < 10; i++) {
+      const mid = (lo + hi) / 2;
+      if (fits(mid)) lo = mid;
+      else hi = mid;
+    }
+    screen.style.setProperty('--home-d', lo.toFixed(3));
+    return;
+  }
+
+  // Shrink from base until it fits.
+  let lo = minD;
+  let hi = base;
+  let best = minD;
+  for (let i = 0; i < 12; i++) {
+    const mid = (lo + hi) / 2;
+    if (fits(mid)) {
+      best = mid;
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+  screen.style.setProperty('--home-d', best.toFixed(3));
 }
 
 let boardEl: HTMLDivElement;
@@ -475,6 +554,22 @@ function piecePreviewHtml(piece: PieceDef, cellPx: number, gapPx = 3): string {
   return html;
 }
 
+function previewCellPx(
+  host: HTMLElement,
+  cols: number,
+  rows: number,
+  fallback: number,
+): number {
+  const w = host.clientWidth;
+  const h = host.clientHeight;
+  if (w < 24 || h < 24) return fallback;
+  const gap = 2;
+  const pad = 8;
+  const byW = Math.floor((w - pad - gap * Math.max(0, cols - 1)) / Math.max(1, cols));
+  const byH = Math.floor((h - pad - gap * Math.max(0, rows - 1)) / Math.max(1, rows));
+  return Math.max(10, Math.min(fallback, byW, byH));
+}
+
 function paintTray(animateIn = false): void {
   trayEl.innerHTML = '';
   for (let i = 0; i < 3; i++) {
@@ -484,19 +579,21 @@ function paintTray(animateIn = false): void {
     const piece = game.tray[i];
     if (!piece) {
       slot.classList.add('empty');
-    } else {
-      const { cols } = pieceBounds(piece.cells);
-      const cellPx = cols >= 5 ? 16 : cols >= 4 ? 20 : 24;
-      slot.innerHTML = piecePreviewHtml(piece, cellPx);
-      bindDrag(slot, i);
-      if (hintSlot === i) slot.classList.add('hint-pulse');
-      if (selectedTrayForHold === i) slot.classList.add('hold-selected');
-      if (animateIn) {
-        slot.classList.add('tray-in');
-        slot.style.animationDelay = `${i * 70}ms`;
-      }
+      trayEl.appendChild(slot);
+      continue;
     }
     trayEl.appendChild(slot);
+    const { rows, cols } = pieceBounds(piece.cells);
+    const fallback = cols >= 5 ? 16 : cols >= 4 ? 20 : 24;
+    const cellPx = previewCellPx(slot, cols, rows, fallback);
+    slot.innerHTML = piecePreviewHtml(piece, cellPx);
+    bindDrag(slot, i);
+    if (hintSlot === i) slot.classList.add('hint-pulse');
+    if (selectedTrayForHold === i) slot.classList.add('hold-selected');
+    if (animateIn) {
+      slot.classList.add('tray-in');
+      slot.style.animationDelay = `${i * 70}ms`;
+    }
   }
 }
 
@@ -508,8 +605,9 @@ function paintHold(): void {
     holdPreview.innerHTML = '<span class="hold-empty">+</span>';
     return;
   }
-  const { cols } = pieceBounds(game.hold.cells);
-  const cellPx = cols >= 5 ? 14 : cols >= 4 ? 18 : 22;
+  const { rows, cols } = pieceBounds(game.hold.cells);
+  const fallback = cols >= 5 ? 14 : cols >= 4 ? 18 : 22;
+  const cellPx = previewCellPx(holdPreview, cols, rows, fallback);
   holdPreview.innerHTML = piecePreviewHtml(game.hold, cellPx);
 }
 

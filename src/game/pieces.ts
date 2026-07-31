@@ -99,17 +99,31 @@ export const PIECE_CATALOG: PieceDef[] = [
 
 const totalWeight = PIECE_CATALOG.reduce((s, p) => s + p.weight, 0);
 
+export type DealBias = 'giants' | 'small';
+
 export type DealOptions = {
   /** Bias toward larger / awkward pieces. */
   hard?: boolean;
   /** Classic rising pressure — boost large pieces as score climbs. */
   score?: number;
+  /** Weekly Mandate deal shape bias. */
+  bias?: DealBias;
 };
 
 function weightFor(piece: PieceDef, opts?: DealOptions): number {
   let w = piece.weight;
   const size = piece.cells.length;
-  if (opts?.hard) {
+  if (opts?.bias === 'giants') {
+    if (size >= 5) w *= 3.2;
+    else if (size >= 4) w *= 2.4;
+    else if (size <= 2) w *= 0.35;
+    else w *= 0.7;
+  } else if (opts?.bias === 'small') {
+    if (size <= 2) w *= 2.8;
+    else if (size === 3) w *= 1.6;
+    else if (size >= 5) w *= 0.35;
+    else w *= 0.55;
+  } else if (opts?.hard) {
     if (size >= 5) w *= 2.4;
     else if (size >= 4) w *= 1.8;
     else if (size <= 2) w *= 0.55;

@@ -11,7 +11,7 @@ import {
   isThemeUnlocked,
   themeUnlockHint,
 } from '../game/themes';
-import { EXPERT_BLURB, EXPERT_FEATURE_LINES, weekKey } from '../game/expert';
+import { EXPERT_BLURB, EXPERT_FEATURE_LINES, getWeeklyMandate, weekKey } from '../game/expert';
 import { todayKey } from '../game/rng';
 import { APP_VERSION } from '../app/version';
 
@@ -43,7 +43,7 @@ function backButton(): string {
 
 function modeLabel(mode: GameMode): string {
   if (mode === 'daily') return 'Today’s Puzzle';
-  if (mode === 'weekly') return 'Weekly Challenge';
+  if (mode === 'weekly') return 'Weekly';
   if (mode === 'blitz') return 'Endgame Sprint';
   return 'Play';
 }
@@ -57,6 +57,7 @@ export function renderHome(
   const expert = profile.expertMode;
   const dailyBest = getDailyBest(profile, todayKey(), expert);
   const week = weekKey();
+  const mandate = getWeeklyMandate(week);
   const classicBest = expert ? profile.bestClassicExpert : profile.bestClassic;
   const continueBtn = continueInfo
     ? `<button type="button" class="menu-btn continue" id="btn-continue">
@@ -71,18 +72,20 @@ export function renderHome(
 
   const expertModes = expert
     ? `
-        <button type="button" class="menu-btn" id="btn-weekly">
-          <span class="menu-title">Weekly Challenge</span>
-          <span class="menu-meta">One tough board this week · Best: ${getWeeklyBest(profile, week)}</span>
-        </button>
-        <button type="button" class="menu-btn" id="btn-blitz">
-          <span class="menu-title">Endgame Sprint</span>
-          <span class="menu-meta">Crowded start · Best: ${profile.bestBlitz}</span>
-        </button>`
+        <div class="menu-row expert-modes-row">
+          <button type="button" class="menu-btn compact-mode" id="btn-weekly">
+            <span class="menu-title">${mandate.name}</span>
+            <span class="menu-meta">Weekly · ${mandate.blurb} · Best: ${getWeeklyBest(profile, week)}</span>
+          </button>
+          <button type="button" class="menu-btn compact-mode" id="btn-blitz">
+            <span class="menu-title">Endgame</span>
+            <span class="menu-meta">Crowded · Best: ${profile.bestBlitz}</span>
+          </button>
+        </div>`
     : '';
 
   root.innerHTML = `
-    <div class="screen home-screen">
+    <div class="screen home-screen" data-mode="${expert ? 'expert' : 'standard'}">
       <div class="home-atmosphere" aria-hidden="true">
         <span class="float-block fb1"></span>
         <span class="float-block fb2"></span>
@@ -131,8 +134,8 @@ export function renderHome(
           </button>
         </div>
 
-        <button type="button" class="menu-btn secondary howto-home-btn" id="btn-howto">
-          <span class="menu-title">${expert ? 'How to Play Expert Mode' : 'How to Play'}</span>
+        <button type="button" class="text-btn howto-link" id="btn-howto">
+          ${expert ? 'How to Play Expert Mode' : 'How to Play'}
         </button>
       </div>
     </div>
@@ -150,6 +153,7 @@ export function renderHome(
 }
 
 export function renderHowTo(root: HTMLElement, h: ScreenHandlers, expert = false): void {
+  const weekMandate = getWeeklyMandate(weekKey());
   if (expert) {
     root.innerHTML = `
       <div class="screen panel-screen">
@@ -207,7 +211,7 @@ export function renderHowTo(root: HTMLElement, h: ScreenHandlers, expert = false
                 <span>Tap another tray piece, then tap Hold again to swap.</span>
               </li>
             </ol>
-            <p class="howto-p">Hold is not available in Expert Daily or Endgame Sprint.</p>
+            <p class="howto-p">Hold is not available in Expert Daily, Endgame Sprint, or Lone Wolf Weekly Mandates.</p>
           </section>
 
           <section class="howto-section">
@@ -230,10 +234,11 @@ export function renderHowTo(root: HTMLElement, h: ScreenHandlers, expert = false
           </section>
 
           <section class="howto-section">
-            <h3 class="howto-h">Weekly Challenge</h3>
+            <h3 class="howto-h">Weekly Mandate</h3>
             <ul class="howto-bullets">
-              <li>One tough seeded board for the whole week.</li>
-              <li>Starts with a crowded layout; Hold is available.</li>
+              <li>Each week has a <strong>named Mandate</strong> (Gridlock, Titans, Precision, Lone Wolf, Rising Tide, or Thrifty) — same for everyone.</li>
+              <li>Rules rotate: crowded starts, huge/small piece deals, no Hold, rising pressure, or no undos.</li>
+              <li>This week: <strong>${weekMandate.name}</strong> — ${weekMandate.howto}</li>
               <li>Tracks a <strong>Weekly best</strong> for that week.</li>
             </ul>
           </section>
