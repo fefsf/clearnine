@@ -10,6 +10,7 @@ import {
   loadProfile,
   recordGameFinished,
   recordPlacement,
+  reversePlacement,
   saveProfile,
   type GameMode,
   type Profile,
@@ -62,6 +63,8 @@ let hintSlot: number | null = null;
 let cheeredBestThisGame = false;
 let displayedScore = 0;
 let scoreAnim: number | null = null;
+/** True after game-over stats have been written for the current overlay. */
+let gameOverFinalized = false;
 
 function modeTitle(mode: GameMode): string {
   if (mode === 'daily') return game.expert ? 'Expert Daily' : 'Today’s Puzzle';
@@ -200,6 +203,7 @@ function startPlay(mode: GameMode, resume: boolean): void {
   teardownHomeLayout();
   sessionClears = 0;
   cheeredBestThisGame = false;
+  gameOverFinalized = false;
   game.configure(mode, {
     dailyDate: todayKey(),
     week: weekKey(),
@@ -294,6 +298,7 @@ function mountPlayUi(mode: GameMode): void {
         <div class="final-score" id="final-score">0</div>
         <p id="best-note"></p>
         <button type="button" class="primary-btn" id="again-btn">Play again</button>
+        <button type="button" class="secondary-btn" id="over-undo-btn" hidden>Undo last move</button>
         <button type="button" class="secondary-btn" id="share-btn" hidden>Share score</button>
         <button type="button" class="secondary-btn" id="over-home-btn">Back to menu</button>
       </div>
@@ -414,6 +419,7 @@ let bestNote: HTMLParagraphElement;
 let againBtn: HTMLButtonElement;
 let shareBtn: HTMLButtonElement;
 let overHomeBtn: HTMLButtonElement;
+let overUndoBtn: HTMLButtonElement;
 let dragGhost: HTMLDivElement;
 let comboBanner: HTMLDivElement;
 let streakBanner: HTMLDivElement;
@@ -444,6 +450,7 @@ function bindPlayDom(): void {
   againBtn = app.querySelector('#again-btn')!;
   shareBtn = app.querySelector('#share-btn')!;
   overHomeBtn = app.querySelector('#over-home-btn')!;
+  overUndoBtn = app.querySelector('#over-undo-btn')!;
   dragGhost = app.querySelector('#drag-ghost')!;
   comboBanner = app.querySelector('#combo-banner')!;
   streakBanner = app.querySelector('#streak-banner')!;
@@ -461,8 +468,17 @@ function bindPlayDom(): void {
     updateHud(true);
   });
 
-  undoBtn.addEventListener('click', () => {
-    if (!game.undo()) return;
+  const performUndo = (): boolean => {
+    const result = game.undo();
+    if (!result.ok) return false;
+    sessionClears = game.clearsThisGame;
+    if (result.placement) {
+      reversePlacement(profile, {
+        clearCount: result.placement.clearCount,
+        cellsCleared: result.placement.cellsCleared,
+      });
+      saveProfile(profile);
+    }
     selectedTrayForHold = null;
     boardEl.classList.add('board-undo');
     sfx.undo();
@@ -473,22 +489,40 @@ function bindPlayDom(): void {
     updateHud(true);
     setTimeout(() => boardEl.classList.remove('board-undo'), 280);
     resetHintTimer();
+    return true;
+  };
+
+  undoBtn.addEventListener('click', () => {
+    performUndo();
   });
 
   newBtn.addEventListener('click', () => {
     void (async () => {
       const ok = await askConfirm('Start over? This board will be cleared.');
       if (!ok) return;
+      finalizeGameOverIfNeeded();
       startFresh();
     })();
   });
 
-  homeBtn.addEventListener('click', () => showHome());
+  homeBtn.addEventListener('click', () => {
+    finalizeGameOverIfNeeded();
+    showHome();
+  });
   againBtn.addEventListener('click', () => {
+    finalizeGameOverIfNeeded();
     startFresh();
   });
   shareBtn.addEventListener('click', () => void shareRunScore());
-  overHomeBtn.addEventListener('click', () => showHome());
+  overHomeBtn.addEventListener('click', () => {
+    finalizeGameOverIfNeeded();
+    showHome();
+  });
+  overUndoBtn.addEventListener('click', () => {
+    if (!performUndo()) return;
+    hideGameOver();
+    gameOverFinalized = false;
+  });
 
   if (holdSlotBtn) {
     bindHoldDrag(holdSlotBtn);
@@ -762,13 +796,40 @@ function onGameOver(): void {
   stopHintTimer();
   clearHintHighlight();
   selectedTrayForHold = null;
+
+  const canUndoLast = game.canUndo();
+  overUndoBtn.hidden = !canUndoLast;
+  if (canUndoLast) {
+    overUndoBtn.textContent = `Undo last move (${game.undosLeft} left)`;
+  }
+
+  overTitle.textContent = 'Great game!';
+  finalScore.textContent = String(game.score);
+  bestNote.textContent = `${bestLabel.textContent}: ${bestTarget()}`;
+  shareBtn.hidden = !game.expert;
+  overlay.classList.add('show', 'overlay-pop');
+
+  // If no undo left, lock in stats now. Otherwise wait until they leave or play again.
+  if (!canUndoLast) {
+    finalizeGameOverIfNeeded();
+  } else {
+    sfx.gameOver();
+    if (game.mode === 'daily') showToast('Daily puzzle finished');
+  }
+}
+
+function finalizeGameOverIfNeeded(): void {
+  if (gameOverFinalized || !game.gameOver) return;
+  gameOverFinalized = true;
   const result = recordGameFinished(profile, {
     mode: game.mode,
     score: game.score,
     cleared: sessionClears,
-    week: weekKey(),
+    week: game.mode === 'weekly' ? game.periodKey : undefined,
+    date: game.mode === 'daily' ? game.periodKey : undefined,
     expert: game.expert,
   });
+  saveProfile(profile);
   checkAndToastGoals();
 
   const isBest =
@@ -776,19 +837,41 @@ function onGameOver(): void {
     result.newDailyBest ||
     result.newWeeklyBest ||
     result.newBlitzBest;
-  overTitle.textContent = isBest ? 'New personal best!' : 'Great game!';
-  finalScore.textContent = String(game.score);
   if (isBest) {
+    overTitle.textContent = 'New personal best!';
     bestNote.textContent = 'That’s a new personal best — amazing!';
     sfx.cheer();
     hapticCheer();
   } else {
-    bestNote.textContent = `${bestLabel.textContent}: ${bestTarget()}`;
     sfx.gameOver();
-    if (game.mode === 'daily') showToast('Daily puzzle finished');
   }
-  shareBtn.hidden = !game.expert;
-  overlay.classList.add('show', 'overlay-pop');
+  if (game.mode === 'daily') showToast('Daily puzzle finished');
+}
+
+function startFresh(): void {
+  hideGameOver();
+  sessionClears = 0;
+  cheeredBestThisGame = false;
+  gameOverFinalized = false;
+  selectedTrayForHold = null;
+  game.newGame();
+  displayedScore = 0;
+  paintBoard();
+  paintTray(true);
+  paintHold();
+  updateHud(true);
+  fitBoardToWrap();
+  boardEl.classList.add('board-enter');
+  setTimeout(() => boardEl.classList.remove('board-enter'), 420);
+  resetHintTimer();
+}
+
+function showGameOver(): void {
+  onGameOver();
+}
+
+function hideGameOver(): void {
+  overlay.classList.remove('show', 'overlay-pop');
 }
 
 async function shareRunScore(): Promise<void> {
@@ -807,14 +890,6 @@ async function shareRunScore(): Promise<void> {
   } catch {
     showToast(text);
   }
-}
-
-function showGameOver(): void {
-  onGameOver();
-}
-
-function hideGameOver(): void {
-  overlay.classList.remove('show', 'overlay-pop');
 }
 
 function spawnClearSparks(cellsList: { r: number; c: number }[]): void {
@@ -1487,23 +1562,6 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
     if (result.gameOver) showGameOver();
     else resetHintTimer();
   }
-}
-
-function startFresh(): void {
-  hideGameOver();
-  sessionClears = 0;
-  cheeredBestThisGame = false;
-  selectedTrayForHold = null;
-  game.newGame();
-  displayedScore = 0;
-  paintBoard();
-  paintTray(true);
-  paintHold();
-  updateHud(true);
-  fitBoardToWrap();
-  boardEl.classList.add('board-enter');
-  setTimeout(() => boardEl.classList.remove('board-enter'), 420);
-  resetHintTimer();
 }
 
 async function openUpdateDownload(info: UpdateInfo): Promise<void> {

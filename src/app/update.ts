@@ -137,7 +137,7 @@ export async function checkForUpdate(opts?: {
     }
     return { status: 'update', info };
   } catch (err) {
-    markChecked();
+    // Do not stamp cooldown on failure — auto-check should retry next launch.
     const message = err instanceof Error ? err.message : 'Could not reach GitHub';
     return { status: 'error', message };
   }

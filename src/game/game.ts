@@ -50,6 +50,15 @@ export type UndoFrame = {
   score: number;
   streak: number;
   rng: RngState;
+  clearsThisGame: number;
+  /** What action created this frame — used to reverse stats correctly. */
+  kind: 'place' | 'swap';
+  placement?: {
+    clearCount: number;
+    cellsCleared: number;
+    combo: number;
+    streak: number;
+  };
 };
 
 export type GameSave = {
@@ -82,11 +91,30 @@ function maxUndos(mode: GameMode, mandate?: WeeklyMandate | null): number {
   return 1; // daily / weekly default
 }
 
-function saveKey(mode: GameMode): string {
-  if (mode === 'daily') return SAVE_DAILY;
-  if (mode === 'weekly') return SAVE_WEEKLY;
-  if (mode === 'blitz') return SAVE_BLITZ;
-  return SAVE_CLASSIC;
+function saveKey(mode: GameMode, expert = false): string {
+  let base = SAVE_CLASSIC;
+  if (mode === 'daily') base = SAVE_DAILY;
+  else if (mode === 'weekly') base = SAVE_WEEKLY;
+  else if (mode === 'blitz') base = SAVE_BLITZ;
+  return expert ? `${base}-expert` : base;
+}
+
+/** Move legacy shared-key expert saves into the expert-namespaced key once. */
+function migrateSharedExpertSave(mode: GameMode): void {
+  try {
+    const calmKey = saveKey(mode, false);
+    const expertKey = saveKey(mode, true);
+    if (localStorage.getItem(expertKey)) return;
+    const raw = localStorage.getItem(calmKey);
+    if (!raw) return;
+    const saved = JSON.parse(raw) as GameSave;
+    if (saved.expert) {
+      localStorage.setItem(expertKey, raw);
+      localStorage.removeItem(calmKey);
+    }
+  } catch {
+    /* ignore */
+  }
 }
 
 function clonePiece(p: PieceDef | null): PieceDef | null {
@@ -223,7 +251,7 @@ export class Game {
       return { ok: false, reason: 'invalid' };
     }
 
-    this.pushUndo();
+    this.pushUndo('place');
 
     const color = colorForPiece(piece);
     placePiece(this.board, piece, row, col, color);
@@ -234,6 +262,7 @@ export class Game {
     this.streak = breakdown.streak;
     this.score += breakdown.total;
     this.clearsThisGame += clears.clearCount;
+    this.tagLastUndoPlacement(clears.clearCount, clears.cells.length, breakdown);
 
     if (clears.clearCount > 0) {
       applyClears(this.board, clears);
@@ -270,7 +299,7 @@ export class Game {
       return { ok: false, reason: 'invalid' };
     }
 
-    this.pushUndo();
+    this.pushUndo('place');
     const piece = this.hold;
     this.hold = null;
     const color = colorForPiece(piece);
@@ -281,6 +310,7 @@ export class Game {
     this.streak = breakdown.streak;
     this.score += breakdown.total;
     this.clearsThisGame += clears.clearCount;
+    this.tagLastUndoPlacement(clears.clearCount, clears.cells.length, breakdown);
     if (clears.clearCount > 0) applyClears(this.board, clears);
 
     let dealt = false;
@@ -313,7 +343,7 @@ export class Game {
     const trayPiece = this.tray[trayIndex];
     if (!trayPiece && !this.hold) return false;
 
-    this.pushUndo();
+    this.pushUndo('swap');
     this.tray[trayIndex] = this.hold;
     this.hold = trayPiece;
     this.persist();
@@ -321,11 +351,17 @@ export class Game {
   }
 
   canUndo(): boolean {
-    return this.undosLeft > 0 && this.undoStack.length > 0 && !this.gameOver;
+    return this.undosLeft > 0 && this.undoStack.length > 0;
   }
 
-  undo(): boolean {
-    if (!this.canUndo()) return false;
+  /**
+   * Restore previous board state. Returns placement stats to reverse when
+   * the undone action was a place (not a hold swap).
+   */
+  undo():
+    | { ok: true; placement: UndoFrame['placement'] | null }
+    | { ok: false } {
+    if (!this.canUndo()) return { ok: false };
     const frame = this.undoStack.pop()!;
     this.board = cloneBoard(frame.board);
     this.tray = frame.tray.map((p) => clonePiece(p));
@@ -333,12 +369,38 @@ export class Game {
     this.score = frame.score;
     this.streak = frame.streak;
     this.rng = cloneRng(frame.rng);
+    this.clearsThisGame =
+      typeof frame.clearsThisGame === 'number' ? frame.clearsThisGame : this.clearsThisGame;
     this.undosLeft -= 1;
+    this.gameOver = false;
+    if (!anyTrayPieceFits(this.board, this.tray)) {
+      if (!this.hold || !pieceFitsHold(this.board, this.hold)) {
+        this.gameOver = true;
+      }
+    }
     this.persist();
-    return true;
+    return {
+      ok: true,
+      placement: frame.kind === 'place' ? (frame.placement ?? null) : null,
+    };
   }
 
-  private pushUndo(): void {
+  private tagLastUndoPlacement(
+    clearCount: number,
+    cellsCleared: number,
+    breakdown: ScoreBreakdown,
+  ): void {
+    const frame = this.undoStack[this.undoStack.length - 1];
+    if (!frame || frame.kind !== 'place') return;
+    frame.placement = {
+      clearCount,
+      cellsCleared,
+      combo: breakdown.comboMultiplier,
+      streak: breakdown.streak,
+    };
+  }
+
+  private pushUndo(kind: 'place' | 'swap'): void {
     this.undoStack.push({
       board: cloneBoard(this.board),
       tray: this.tray.map((p) => clonePiece(p)),
@@ -346,6 +408,8 @@ export class Game {
       score: this.score,
       streak: this.streak,
       rng: { seed: this.rng.seed, counter: this.rng.counter },
+      clearsThisGame: this.clearsThisGame,
+      kind,
     });
     const cap = this.undosLeft;
     if (this.undoStack.length > cap) {
@@ -365,12 +429,12 @@ export class Game {
   }
 
   clearPersist(): void {
-    clearSave(this.mode);
+    clearSave(this.mode, this.expert);
   }
 
   private persist(): void {
     if (this.gameOver) {
-      clearSave(this.mode);
+      clearSave(this.mode, this.expert);
       return;
     }
     const save: GameSave = {
@@ -399,7 +463,8 @@ function pieceFitsHold(board: Board, piece: PieceDef): boolean {
 
 function writeSave(mode: GameMode, save: GameSave): void {
   try {
-    localStorage.setItem(saveKey(mode), JSON.stringify(save));
+    const expert = save.expert ?? false;
+    localStorage.setItem(saveKey(mode, expert), JSON.stringify(save));
   } catch {
     /* ignore */
   }
@@ -419,7 +484,8 @@ function loadSave(
         localStorage.removeItem(LEGACY_SAVE);
       }
     }
-    const raw = localStorage.getItem(saveKey(mode));
+    migrateSharedExpertSave(mode);
+    const raw = localStorage.getItem(saveKey(mode, expert));
     if (!raw) return null;
     const saved = JSON.parse(raw) as GameSave;
     if ((saved.expert ?? false) !== expert) return null;
@@ -432,9 +498,9 @@ function loadSave(
   }
 }
 
-function clearSave(mode: GameMode): void {
+function clearSave(mode: GameMode, expert = false): void {
   try {
-    localStorage.removeItem(saveKey(mode));
+    localStorage.removeItem(saveKey(mode, expert));
   } catch {
     /* ignore */
   }

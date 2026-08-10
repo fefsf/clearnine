@@ -169,6 +169,19 @@ export function recordPlacement(
   profile.stats.maxStreak = Math.max(profile.stats.maxStreak, opts.streak);
 }
 
+/** Roll back a placement that was undone (counts only; lifetime maxes stay). */
+export function reversePlacement(
+  profile: Profile,
+  opts: {
+    clearCount: number;
+    cellsCleared: number;
+  },
+): void {
+  profile.stats.piecesPlaced = Math.max(0, profile.stats.piecesPlaced - 1);
+  profile.stats.linesCleared = Math.max(0, profile.stats.linesCleared - opts.clearCount);
+  profile.stats.cellsCleared = Math.max(0, profile.stats.cellsCleared - opts.cellsCleared);
+}
+
 export function recordGameFinished(
   profile: Profile,
   opts: {
