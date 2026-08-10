@@ -65,6 +65,9 @@ let displayedScore = 0;
 let scoreAnim: number | null = null;
 /** True after game-over stats have been written for the current overlay. */
 let gameOverFinalized = false;
+/** Bumped when leaving play so delayed clear/game-over callbacks no-op. */
+let playSessionId = 0;
+let clearAnimTimer: ReturnType<typeof setTimeout> | null = null;
 
 function modeTitle(mode: GameMode): string {
   if (mode === 'daily') return game.expert ? 'Expert Daily' : 'Today’s Puzzle';
@@ -204,12 +207,19 @@ function startPlay(mode: GameMode, resume: boolean): void {
   sessionClears = 0;
   cheeredBestThisGame = false;
   gameOverFinalized = false;
+  playSessionId += 1;
+  const session = playSessionId;
+  if (clearAnimTimer) {
+    clearTimeout(clearAnimTimer);
+    clearAnimTimer = null;
+  }
   game.configure(mode, {
     dailyDate: todayKey(),
     week: weekKey(),
     expert: profile.expertMode,
   });
   transitionScreen(app, () => {
+    if (session !== playSessionId) return;
     mountPlayUi(mode);
     if (resume) {
       game.loadOrNew();
@@ -313,6 +323,11 @@ function mountPlayUi(mode: GameMode): void {
 }
 
 function teardownPlayLayout(): void {
+  if (clearAnimTimer) {
+    clearTimeout(clearAnimTimer);
+    clearAnimTimer = null;
+  }
+  playSessionId += 1;
   app.classList.remove('play-layout');
   window.removeEventListener('resize', fitBoardToWrap);
   window.visualViewport?.removeEventListener('resize', fitBoardToWrap);
@@ -725,8 +740,11 @@ function clearHintHighlight(): void {
   if (trayEl) {
     trayEl.querySelectorAll('.hint-pulse').forEach((el) => el.classList.remove('hint-pulse'));
   }
+  holdSlotBtn?.classList.remove('hint-pulse');
   if (hintEl) {
-    hintEl.textContent = 'Your pieces — drag one onto the board';
+    hintEl.textContent = game.holdEnabled()
+      ? 'Your pieces — drag one, or tap then Hold to park'
+      : 'Your pieces — drag one onto the board';
     hintEl.classList.remove('hint-active');
   }
 }
@@ -750,14 +768,28 @@ function findHintSlot(): number | null {
   return best?.index ?? null;
 }
 
+function holdFitsAnywhere(): boolean {
+  return !!game.hold && pieceFitsAnywhere(game.board, game.hold);
+}
+
 function showStuckHint(): void {
   if (game.gameOver || drag) return;
   const index = findHintSlot();
-  if (index === null) return;
-  hintSlot = index;
-  paintTray();
-  hintEl.textContent = 'Try the glowing piece — drag it onto the board';
-  hintEl.classList.add('hint-active');
+  if (index !== null) {
+    hintSlot = index;
+    paintTray();
+    hintEl.textContent = 'Try the glowing piece — drag it onto the board';
+    hintEl.classList.add('hint-active');
+    return;
+  }
+  if (game.holdEnabled() && holdFitsAnywhere()) {
+    hintSlot = null;
+    paintTray();
+    paintHold();
+    holdSlotBtn?.classList.add('hint-pulse');
+    hintEl.textContent = 'Your Hold piece still fits — drag it onto the board';
+    hintEl.classList.add('hint-active');
+  }
 }
 
 function maybeCheerNewBest(): void {
@@ -1241,7 +1273,7 @@ function originFromGhostOverlay(
   };
 }
 
-/** Prefer exact overlay; snap a little if slightly invalid (helps corners / bottom row). */
+/** Prefer exact overlay; snap only 1 cell if slightly invalid (corners / bottom). */
 function resolvePlacement(
   trayIndex: number,
   piece: PieceDef,
@@ -1254,13 +1286,15 @@ function resolvePlacement(
   if (can) {
     return { row: naive.row, col: naive.col, valid: true };
   }
-  const snapped = findNearestPlacement(game.board, piece, naive.row, naive.col, 2);
+  const snapped = findNearestPlacement(game.board, piece, naive.row, naive.col, 1);
   if (snapped) {
     const ok =
       trayIndex < 0
         ? game.canPlaceHoldAt(snapped.row, snapped.col)
         : game.canPlaceAt(trayIndex, snapped.row, snapped.col);
-    if (ok) return { row: snapped.row, col: snapped.col, valid: true };
+    if (ok) {
+      return { row: snapped.row, col: snapped.col, valid: true };
+    }
   }
   return { row: naive.row, col: naive.col, valid: false };
 }
@@ -1540,7 +1574,11 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
     flashBanners(result.score.comboMultiplier, result.score.streak, true);
     showScorePop(result.score.total, x, y);
 
-    setTimeout(() => {
+    const sessionAtClear = playSessionId;
+    if (clearAnimTimer) clearTimeout(clearAnimTimer);
+    clearAnimTimer = setTimeout(() => {
+      clearAnimTimer = null;
+      if (sessionAtClear !== playSessionId) return;
       for (const cell of cells) {
         cell.style.animationDelay = '';
       }

@@ -517,7 +517,13 @@ function boardHasBlocks(board: Board): boolean {
 
 function saveIsContinuable(saved: GameSave | null): saved is GameSave {
   if (!saved || saved.gameOver) return false;
-  return saved.score > 0 || boardHasBlocks(saved.board) || !!saved.hold;
+  const trayHasPiece = saved.tray.some((p) => p != null);
+  return (
+    saved.score > 0 ||
+    boardHasBlocks(saved.board) ||
+    !!saved.hold ||
+    trayHasPiece
+  );
 }
 
 /** Unfinished game matching current Expert on/off. */
@@ -534,4 +540,9 @@ export function findContinueGame(expert = false): { mode: GameMode; score: numbe
     }
   }
   return null;
+}
+
+/** Exported for debug / tests: whether a save counts as Continue. */
+export function isSaveContinuable(saved: GameSave | null): boolean {
+  return saveIsContinuable(saved);
 }

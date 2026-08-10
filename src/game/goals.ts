@@ -16,22 +16,22 @@ export const GOALS: GoalDef[] = [
   {
     id: 'score_500',
     title: 'Getting started',
-    description: 'Score 500 in Classic',
+    description: 'Score 500 in Play (any mode)',
     unlocksTheme: 'sunset',
-    check: (p) => p.bestClassic >= 500,
+    check: (p) => p.bestClassic >= 500 || p.bestClassicExpert >= 500,
   },
   {
     id: 'score_2000',
     title: 'Sharp eye',
-    description: 'Score 2,000 in Classic',
-    check: (p) => p.bestClassic >= 2000,
+    description: 'Score 2,000 in Play (any mode)',
+    check: (p) => p.bestClassic >= 2000 || p.bestClassicExpert >= 2000,
   },
   {
     id: 'score_5000',
     title: 'Block master',
-    description: 'Score 5,000 in Classic',
+    description: 'Score 5,000 in Play (any mode)',
     unlocksTheme: 'midnight',
-    check: (p) => p.bestClassic >= 5000,
+    check: (p) => p.bestClassic >= 5000 || p.bestClassicExpert >= 5000,
   },
   {
     id: 'combo_3',
