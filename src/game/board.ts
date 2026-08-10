@@ -100,13 +100,13 @@ export function seedDailyStarters(
   board: Board,
   next: () => number,
   opts?: { expert?: boolean; dense?: boolean },
-): void {
+): number {
   const expert = opts?.expert ?? false;
   const dense = opts?.dense ?? false;
   const pool = dense || expert
     ? PIECE_CATALOG.filter((p) => p.cells.length >= 2 && p.cells.length <= 5)
     : DAILY_STARTER_POOL;
-  if (pool.length === 0) return;
+  if (pool.length === 0) return 0;
 
   let pieceCount: number;
   if (dense) pieceCount = 5 + Math.floor(next() * 3); // 5–7
@@ -114,19 +114,24 @@ export function seedDailyStarters(
   else pieceCount = next() < 0.55 ? 2 : 3;
 
   const usedRegions = new Set<string>();
+  let placedCount = 0;
 
-  for (let i = 0; i < pieceCount; i++) {
-    const piece = pool[Math.floor(next() * pool.length)]!;
-    const color = 1 + Math.floor(next() * PIECE_COLORS);
+  const tryPlacePiece = (
+    piece: PieceDef,
+    color: number,
+    relaxRegions: boolean,
+    maxAttempts: number,
+  ): boolean => {
     const { rows, cols } = pieceBounds(piece.cells);
-
-    for (let attempt = 0; attempt < 48; attempt++) {
+    for (let attempt = 0; attempt < maxAttempts; attempt++) {
       const row = Math.floor(next() * (BOARD_SIZE - rows + 1));
       const col = Math.floor(next() * (BOARD_SIZE - cols + 1));
       if (!canPlace(board, piece, row, col)) continue;
 
       const regionKey = `${Math.floor(row / REGION)},${Math.floor(col / REGION)}`;
-      if (usedRegions.has(regionKey) && attempt < 24 && !dense) continue;
+      if (!relaxRegions && usedRegions.has(regionKey) && attempt < 24 && !dense) {
+        continue;
+      }
 
       const trial = cloneBoard(board);
       placePiece(trial, piece, row, col, color);
@@ -134,9 +139,33 @@ export function seedDailyStarters(
 
       placePiece(board, piece, row, col, color);
       usedRegions.add(regionKey);
-      break;
+      return true;
+    }
+    return false;
+  };
+
+  for (let i = 0; i < pieceCount; i++) {
+    const piece = pool[Math.floor(next() * pool.length)]!;
+    const color = 1 + Math.floor(next() * PIECE_COLORS);
+
+    if (tryPlacePiece(piece, color, false, 48)) {
+      placedCount += 1;
+      continue;
+    }
+
+    // Fallback: ignore region uniqueness, then try a smaller catalog piece.
+    if (tryPlacePiece(piece, color, true, 64)) {
+      placedCount += 1;
+      continue;
+    }
+    const smallPool = PIECE_CATALOG.filter((p) => p.cells.length <= 3);
+    const small = smallPool[Math.floor(next() * smallPool.length)];
+    if (small && tryPlacePiece(small, color, true, 64)) {
+      placedCount += 1;
     }
   }
+
+  return placedCount;
 }
 
 export type ClearResult = {

@@ -1,3 +1,4 @@
+import { writeLocal } from '../app/storage';
 import { addDays, todayKey } from './rng';
 
 export type GameMode = 'classic' | 'daily' | 'weekly' | 'blitz';
@@ -96,7 +97,9 @@ export function loadProfile(): Profile {
         haptics: parsed.haptics ?? true,
         expertMode: parsed.expertMode ?? false,
         seenTutorial:
-          typeof parsed.seenTutorial === 'boolean' ? parsed.seenTutorial : true,
+          typeof parsed.seenTutorial === 'boolean'
+            ? parsed.seenTutorial
+            : false,
       };
     }
   } catch {
@@ -120,11 +123,7 @@ function migrateLegacy(): Profile {
 }
 
 export function saveProfile(profile: Profile): void {
-  try {
-    localStorage.setItem(STORAGE_PROFILE, JSON.stringify(profile));
-  } catch {
-    /* ignore */
-  }
+  writeLocal(STORAGE_PROFILE, JSON.stringify(profile));
 }
 
 export function getDailyBest(profile: Profile, date = todayKey(), expert = false): number {

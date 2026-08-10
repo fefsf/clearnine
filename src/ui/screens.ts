@@ -589,7 +589,7 @@ export function askUpdateAvailable(opts: {
   return new Promise((resolve) => {
     const note = opts.notes
       ? `<p class="confirm-msg update-notes">${escapeHtml(opts.notes.slice(0, 280))}${opts.notes.length > 280 ? '…' : ''}</p>`
-      : `<p class="confirm-msg">A newer ClearNine is ready on GitHub. Download the APK and install over this app.</p>`;
+      : `<p class="confirm-msg">Opens the GitHub release so you can download the APK and install it over this app (not an automatic update).</p>`;
     const wrap = document.createElement('div');
     wrap.className = 'overlay show confirm-overlay';
     wrap.innerHTML = `
@@ -597,7 +597,7 @@ export function askUpdateAvailable(opts: {
         <h2>Update available</h2>
         <p class="confirm-msg"><strong>ClearNine v${escapeHtml(opts.version)}</strong> is out (you have v${APP_VERSION}).</p>
         ${note}
-        <button type="button" class="primary-btn" id="update-download">Download update</button>
+        <button type="button" class="primary-btn" id="update-download">Open download page</button>
         <button type="button" class="secondary-btn" id="update-later">Remind me later</button>
         <button type="button" class="secondary-btn" id="update-skip">Skip this version</button>
       </div>`;

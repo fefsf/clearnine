@@ -41,6 +41,7 @@ import {
   transitionScreen,
   type ScreenHandlers,
 } from './ui/screens';
+import { setStorageFailHandler } from './app/storage';
 import { checkForUpdate, skipVersion, type UpdateInfo } from './app/update';
 import { APP_VERSION } from './app/version';
 import './styles.css';
@@ -1689,6 +1690,7 @@ async function runUpdateCheck(opts: {
 }
 
 function boot(): void {
+  setStorageFailHandler((message) => showToast(message));
   showSplash(() => {
     showHome();
     if (!profile.seenTutorial) {

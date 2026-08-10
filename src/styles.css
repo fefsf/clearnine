@@ -598,6 +598,14 @@ body {
   font-size: 1.55rem;
 }
 
+.home-screen .menu-btn.continue {
+  min-height: var(--home-btn-primary);
+}
+
+.home-screen .menu-btn.continue .menu-title {
+  font-size: var(--home-menu-primary-title);
+}
+
 .tray {
   display: grid;
   grid-template-columns: repeat(3, 1fr);

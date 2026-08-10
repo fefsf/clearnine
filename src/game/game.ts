@@ -26,6 +26,7 @@ import {
 } from './rng';
 import { scorePlacement, type ScoreBreakdown } from './scoring';
 import type { GameMode } from './stats';
+import { writeLocal } from '../app/storage';
 
 export type TraySlot = PieceDef | null;
 
@@ -241,6 +242,10 @@ export class Game {
     this.expert = saved.expert ?? false;
     if (saved.dailyDate) this.dailyDate = saved.dailyDate;
     if (saved.weekKey) this.weekId = saved.weekKey;
+    // Corrupt / mode mismatch: Hold must not keep a dead game alive with no UI.
+    if (!this.holdEnabled() && this.hold) {
+      this.hold = null;
+    }
   }
 
   tryPlace(trayIndex: number, row: number, col: number): PlaceResult {
@@ -462,12 +467,8 @@ function pieceFitsHold(board: Board, piece: PieceDef): boolean {
 }
 
 function writeSave(mode: GameMode, save: GameSave): void {
-  try {
-    const expert = save.expert ?? false;
-    localStorage.setItem(saveKey(mode, expert), JSON.stringify(save));
-  } catch {
-    /* ignore */
-  }
+  const expert = save.expert ?? false;
+  writeLocal(saveKey(mode, expert), JSON.stringify(save));
 }
 
 function loadSave(

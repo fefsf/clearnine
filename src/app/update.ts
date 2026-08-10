@@ -1,3 +1,4 @@
+import { writeLocal } from './storage';
 import { APP_VERSION } from './version';
 
 const RELEASES_URL = 'https://api.github.com/repos/fefsf/clearnine/releases/latest';
@@ -44,11 +45,7 @@ function getSkippedVersion(): string | null {
 }
 
 export function skipVersion(version: string): void {
-  try {
-    localStorage.setItem(STORAGE_SKIPPED, version);
-  } catch {
-    /* ignore */
-  }
+  writeLocal(STORAGE_SKIPPED, version);
 }
 
 function shouldAutoCheck(): boolean {
@@ -64,11 +61,7 @@ function shouldAutoCheck(): boolean {
 }
 
 function markChecked(): void {
-  try {
-    localStorage.setItem(STORAGE_LAST_CHECK, String(Date.now()));
-  } catch {
-    /* ignore */
-  }
+  writeLocal(STORAGE_LAST_CHECK, String(Date.now()));
 }
 
 type GhRelease = {
