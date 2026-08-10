@@ -526,14 +526,22 @@ export function showSplash(onDone: () => void): void {
   }, 900);
 }
 
+let transitionGen = 0;
+
 export function transitionScreen(root: HTMLElement, render: () => void): void {
+  transitionGen += 1;
+  const gen = transitionGen;
   root.classList.add('screen-exit');
   setTimeout(() => {
+    if (gen !== transitionGen) return;
     render();
     root.classList.remove('screen-exit');
     root.classList.add('screen-enter');
     requestAnimationFrame(() => {
-      requestAnimationFrame(() => root.classList.remove('screen-enter'));
+      requestAnimationFrame(() => {
+        if (gen !== transitionGen) return;
+        root.classList.remove('screen-enter');
+      });
     });
   }, 160);
 }

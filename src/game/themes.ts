@@ -181,9 +181,27 @@ async function syncNativeStatusBar(darkIcons: boolean): Promise<void> {
   try {
     const { StatusBar, Style } = await import('@capacitor/status-bar');
     await StatusBar.setStyle({ style: darkIcons ? Style.Light : Style.Dark });
-    await StatusBar.setBackgroundColor({
-      color: getComputedStyle(document.documentElement).getPropertyValue('--bg-top').trim() || '#1a2430',
-    });
+    try {
+      await StatusBar.setOverlaysWebView({ overlay: true });
+    } catch {
+      /* Android 15+ may ignore */
+    }
+    try {
+      await StatusBar.setBackgroundColor({
+        color: getComputedStyle(document.documentElement).getPropertyValue('--bg-top').trim() || '#1a2430',
+      });
+    } catch {
+      /* not available when overlay / Android 15+ */
+    }
+
+    const info = await StatusBar.getInfo().catch(() => null);
+    const root = document.documentElement;
+    const envTop = getComputedStyle(root).getPropertyValue('--safe-top').trim();
+    const envTopPx = Number.parseFloat(envTop) || 0;
+    // Fallback when WebView reports 0 safe-area but status bar has height.
+    if (envTopPx < 1 && info?.overlays && info.height > 0) {
+      root.style.setProperty('--safe-top', `${Math.round(info.height)}px`);
+    }
   } catch {
     /* web / unsupported */
   }

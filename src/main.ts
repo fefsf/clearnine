@@ -235,6 +235,13 @@ function startPlay(mode: GameMode, resume: boolean): void {
     hideGameOver();
     requestAnimationFrame(() => {
       fitBoardToWrap();
+      const wrap = boardEl?.parentElement;
+      const wrapH = wrap?.clientHeight ?? 0;
+      const starved = wrapH > 0 && wrapH < 220;
+      app.classList.toggle('play-compact', starved && profile.expertMode);
+      if (starved) {
+        requestAnimationFrame(() => fitBoardToWrap());
+      }
       boardEl.classList.add('board-enter');
       setTimeout(() => boardEl.classList.remove('board-enter'), 420);
     });
@@ -329,6 +336,7 @@ function teardownPlayLayout(): void {
   }
   playSessionId += 1;
   app.classList.remove('play-layout');
+  app.classList.remove('play-compact');
   window.removeEventListener('resize', fitBoardToWrap);
   window.visualViewport?.removeEventListener('resize', fitBoardToWrap);
 }
@@ -338,6 +346,25 @@ function fitBoardToWrap(): void {
   if (!boardEl || !boardEl.isConnected) return;
   const wrap = boardEl.parentElement;
   if (!wrap) return;
+  if (app.classList.contains('play-layout') && profile.expertMode) {
+    const starved = wrap.clientHeight > 0 && wrap.clientHeight < 220;
+    const was = app.classList.contains('play-compact');
+    app.classList.toggle('play-compact', starved);
+    if (was !== starved) {
+      // chrome size changed — remeasure after layout
+      requestAnimationFrame(() => {
+        if (!boardEl?.isConnected) return;
+        const w2 = boardEl.parentElement;
+        if (!w2) return;
+        const w = w2.clientWidth;
+        const h = w2.clientHeight;
+        if (w < 40 || h < 40) return;
+        const size = Math.floor(Math.min(w, h));
+        boardEl.style.width = `${size}px`;
+        boardEl.style.height = `${size}px`;
+      });
+    }
+  }
   const w = wrap.clientWidth;
   const h = wrap.clientHeight;
   if (w < 40 || h < 40) return;
@@ -357,6 +384,10 @@ function setupHomeLayout(): void {
   });
   window.addEventListener('resize', fitHomeLayout);
   window.visualViewport?.addEventListener('resize', fitHomeLayout);
+  void document.fonts?.ready?.then(() => {
+    if (!homeLayoutActive) return;
+    fitHomeLayout();
+  });
 }
 
 function teardownHomeLayout(): void {
@@ -378,7 +409,7 @@ function fitHomeLayout(): void {
 
   const expert = screen.dataset.mode === 'expert';
   const base = expert ? 0.94 : 1.06;
-  const minD = 0.72;
+  const minD = 0.62;
   const maxD = expert ? 1.02 : 1.12;
   const margin = 6;
 
@@ -397,23 +428,27 @@ function fitHomeLayout(): void {
       else hi = mid;
     }
     screen.style.setProperty('--home-d', lo.toFixed(3));
-    return;
+  } else {
+    // Shrink from base until it fits.
+    let lo = minD;
+    let hi = base;
+    let best = minD;
+    for (let i = 0; i < 12; i++) {
+      const mid = (lo + hi) / 2;
+      if (fits(mid)) {
+        best = mid;
+        lo = mid;
+      } else {
+        hi = mid;
+      }
+    }
+    screen.style.setProperty('--home-d', best.toFixed(3));
   }
 
-  // Shrink from base until it fits.
-  let lo = minD;
-  let hi = base;
-  let best = minD;
-  for (let i = 0; i < 12; i++) {
-    const mid = (lo + hi) / 2;
-    if (fits(mid)) {
-      best = mid;
-      lo = mid;
-    } else {
-      hi = mid;
-    }
-  }
-  screen.style.setProperty('--home-d', best.toFixed(3));
+  // Allow a few px of subpixel / font rounding before treating as clipped.
+  const overflow = content.scrollHeight - (screen.clientHeight - margin);
+  // Scroll fallback only when density floor still cannot fit.
+  screen.classList.toggle('home-scroll', overflow > 4);
 }
 
 let boardEl: HTMLDivElement;

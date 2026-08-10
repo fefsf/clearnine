@@ -926,6 +926,16 @@ body {
   min-height: 0;
 }
 
+.home-screen.home-scroll {
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.home-screen.home-scroll .home-content {
+  overflow: visible;
+}
+
 .home-screen {
   position: relative;
   justify-content: flex-start;
@@ -2154,6 +2164,55 @@ body {
   .celebrate-banner {
     font-size: 1.2rem !important;
   }
+}
+
+/* Runtime short Expert play: reclaim board space when wrap is starved */
+#app.play-compact {
+  gap: 2px;
+}
+
+#app.play-compact .tray-label,
+#app.play-compact .hold-hint,
+#app.play-compact .beat-target,
+#app.play-compact .tool-meta {
+  display: none;
+}
+
+#app.play-compact .hold-slot {
+  min-width: 56px;
+  min-height: 44px;
+  padding: 2px 4px;
+}
+
+#app.play-compact .hold-preview {
+  min-height: 22px;
+}
+
+#app.play-compact .hold-wrap {
+  margin: 0;
+  gap: 6px;
+}
+
+#app.play-compact .tray {
+  gap: 4px;
+  padding: 4px 6px 6px;
+}
+
+#app.play-compact .tray-slot {
+  min-height: 46px;
+}
+
+#app.play-compact .tool-btn {
+  min-height: 38px;
+  padding: 2px;
+}
+
+#app.play-compact .score-block {
+  padding: 2px 4px;
+}
+
+#app.play-compact .score-value {
+  font-size: 1.2rem;
 }
 
 @media (prefers-reduced-motion: reduce) {
