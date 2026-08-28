@@ -125,7 +125,7 @@ export function renderHome(
             <span class="menu-title">My Scores</span>
           </button>
           <button type="button" class="menu-btn secondary" id="btn-board">
-            <span class="menu-title">Board</span>
+            <span class="menu-title">Leaderboard</span>
           </button>
         </div>
 
@@ -474,16 +474,16 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
           <span class="menu-meta">GitHub releases</span>
         </button>
         <button type="button" class="menu-btn settings-row ${profile.leaderboardOn ? 'expert-on' : ''}" id="btn-toggle-board">
-          <span class="menu-title">Join the Board</span>
+          <span class="menu-title">Join the Leaderboard</span>
           <span class="menu-meta" id="board-state">${profile.leaderboardOn ? 'On' : 'Off'}</span>
         </button>
         <label class="settings-name">
-          <span class="settings-name-label">Board name</span>
+          <span class="settings-name-label">Leaderboard name</span>
           <input type="text" id="board-name" maxlength="20" autocomplete="nickname" spellcheck="false"
-            placeholder="Shown on the Board"
+            placeholder="Shown on the leaderboard"
             value="${escapeHtml(profile.leaderboardName)}" />
         </label>
-        <p class="settings-name-hint">Optional. Play stays on your phone. The Board only gets a name and score if this is On.</p>
+        <p class="settings-name-hint">Optional. Play stays on your phone. The leaderboard only gets a name and score if this is On.</p>
         <p class="settings-version">ClearNine v${APP_VERSION}</p>
       </div>
     </div>
@@ -544,11 +544,11 @@ export function renderBoard(
   ).join('');
   let body: string;
   if (state.loading) {
-    body = `<p class="empty-note">Loading the Board…</p>`;
+    body = `<p class="empty-note">Loading the leaderboard…</p>`;
   } else if (state.error) {
     body = `<p class="empty-note">${escapeHtml(state.error)}</p>`;
   } else if (!state.rows.length) {
-    body = `<p class="empty-note">No scores yet. Turn on Join the Board in Settings, then finish a game.</p>`;
+    body = `<p class="empty-note">No scores yet. Turn on Join the Leaderboard in Settings, then finish a game.</p>`;
   } else {
     body = `<ol class="board-list">${state.rows
       .map(
@@ -562,14 +562,14 @@ export function renderBoard(
   }
   const joined = profile.leaderboardOn
     ? `Playing as ${profile.leaderboardName || '—'} · scores post when a game ends`
-    : 'Off — turn on Join the Board in Settings';
+    : 'Off — turn on Join the Leaderboard in Settings';
 
   root.innerHTML = `
     <div class="screen panel-screen">
       <header class="panel-head">
         ${backButton()}
       </header>
-      <h2 class="panel-title">Board</h2>
+      <h2 class="panel-title">Leaderboard</h2>
       <p class="panel-lead">${escapeHtml(joined)}</p>
       <div class="board-tabs">${tabs}</div>
       <div class="panel-body">${body}</div>

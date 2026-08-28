@@ -1,4 +1,4 @@
-# ClearNine Board (Windows)
+# ClearNine Leaderboard (Windows)
 
 Listens on `0.0.0.0:45589`. Cloudflare should send `https://c9.heezynet.com` here.
 

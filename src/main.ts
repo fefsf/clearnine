@@ -152,14 +152,14 @@ const handlers: ScreenHandlers = {
   },
   onToggleLeaderboard: () => {
     if (!profile.leaderboardOn && !profile.leaderboardName.trim()) {
-      showToast('Type a Board name first');
+      showToast('Type a leaderboard name first');
       return;
     }
     profile.leaderboardOn = !profile.leaderboardOn;
     saveProfile(profile);
     hapticTap();
     sfx.tap();
-    showToast(profile.leaderboardOn ? 'Board is on — scores can post' : 'Board is off');
+    showToast(profile.leaderboardOn ? 'Leaderboard is on — scores can post' : 'Leaderboard is off');
   },
   onSaveLeaderboardName: (name) => {
     profile.leaderboardName = name.replace(/\s+/g, ' ').trim().slice(0, 20);
@@ -260,7 +260,7 @@ function showBoard(): void {
   paint(true, null, []);
   void fetchBoard(tab, todayKey(), weekKey())
     .then((rows) => paint(false, null, rows))
-    .catch(() => paint(false, 'Can’t reach the Board right now.', []));
+    .catch(() => paint(false, 'Can’t reach the leaderboard right now.', []));
 }
 
 function startPlay(mode: GameMode, resume: boolean): void {
@@ -1027,12 +1027,12 @@ async function maybeSubmitBoardScore(): Promise<void> {
       periodKey,
     });
     if (result.improved && result.rank) {
-      showToast(`Board rank #${result.rank}`);
+      showToast(`Leaderboard rank #${result.rank}`);
     } else if (result.ok) {
-      showToast('Board already has this best');
+      showToast('Leaderboard already has this best');
     }
   } catch {
-    showToast('Could not reach the Board');
+    showToast('Could not reach the leaderboard');
   }
 }
 
