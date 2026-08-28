@@ -42,6 +42,7 @@ import {
   type ScreenHandlers,
 } from './ui/screens';
 import { setStorageFailHandler } from './app/storage';
+import { ApkInstaller } from './app/apk-installer';
 import { checkForUpdate, skipVersion, type UpdateInfo } from './app/update';
 import { APP_VERSION } from './app/version';
 import './styles.css';
@@ -254,10 +255,10 @@ function mountPlayUi(mode: GameMode): void {
   const modeLabel = modeTitle(mode);
   const holdHtml = game.holdEnabled()
     ? `<div class="hold-wrap">
-        <button type="button" class="hold-slot" id="hold-slot" aria-label="Hold piece">
+        <div class="hold-slot" id="hold-slot" role="button" tabindex="0" aria-label="Hold piece">
           <span class="hold-label">Hold</span>
           <div class="hold-preview" id="hold-preview"></div>
-        </button>
+        </div>
         <p class="hold-hint">Tap a tray piece, then Hold to park it</p>
       </div>`
     : '';
@@ -477,7 +478,7 @@ let streakBanner: HTMLDivElement;
 let celebrateBanner: HTMLDivElement;
 let hintEl: HTMLParagraphElement;
 let overTitle: HTMLHeadingElement;
-let holdSlotBtn: HTMLButtonElement | null = null;
+let holdSlotBtn: HTMLElement | null = null;
 let holdPreview: HTMLDivElement | null = null;
 let selectedTrayForHold: number | null = null;
 const cells: HTMLDivElement[] = [];
@@ -687,6 +688,26 @@ function paintHold(): void {
   if (!holdPreview || !holdSlotBtn) return;
   holdSlotBtn.classList.toggle('has-piece', !!game.hold);
   holdSlotBtn.classList.toggle('awaiting', selectedTrayForHold !== null);
+  const holdLabel = holdSlotBtn.querySelector('.hold-label');
+  if (holdLabel) {
+    if (selectedTrayForHold !== null) {
+      holdLabel.textContent = game.hold ? 'Swap' : 'Park';
+    } else if (game.hold) {
+      holdLabel.textContent = 'Drag';
+    } else {
+      holdLabel.textContent = 'Hold';
+    }
+  }
+  if (selectedTrayForHold !== null) {
+    holdSlotBtn.setAttribute(
+      'aria-label',
+      game.hold ? 'Swap with parked piece' : 'Park selected piece',
+    );
+  } else if (game.hold) {
+    holdSlotBtn.setAttribute('aria-label', 'Drag parked piece onto the board');
+  } else {
+    holdSlotBtn.setAttribute('aria-label', 'Hold piece');
+  }
   const holdHint = app.querySelector('.hold-hint');
   if (holdHint) {
     if (selectedTrayForHold !== null) {
@@ -694,7 +715,7 @@ function paintHold(): void {
         ? 'Tap Hold to swap with the parked piece'
         : 'Tap Hold to park it';
     } else if (game.hold) {
-      holdHint.textContent = 'Drag Hold onto the board — or tap a tray piece to swap';
+      holdHint.textContent = 'Drag this piece onto the board — or tap a tray piece to swap';
     } else {
       holdHint.textContent = 'Tap a tray piece, then Hold to park it';
     }
@@ -1414,7 +1435,7 @@ function bindDrag(slot: HTMLDivElement, trayIndex: number): void {
   slot.addEventListener('pointercancel', (e) => onPointerEnd(e, slot));
 }
 
-function bindHoldDrag(slot: HTMLButtonElement): void {
+function bindHoldDrag(slot: HTMLElement): void {
   slot.addEventListener('pointerdown', (e) => {
     if (game.gameOver || !game.holdEnabled()) return;
 
@@ -1434,7 +1455,7 @@ function bindHoldDrag(slot: HTMLButtonElement): void {
         if (swapped.dealt && game.hold) {
           showToast('New pieces dealt — drag Hold onto the board anytime');
         } else if (game.hold) {
-          showToast('Parked — drag Hold onto the board when you’re ready');
+          showToast('Parked — drag it onto the board when you’re ready');
         }
         if (game.gameOver) showGameOver();
         else resetHintTimer();
@@ -1467,6 +1488,7 @@ function bindHoldDrag(slot: HTMLButtonElement): void {
       startX: x,
       startY: y,
     };
+    slot.classList.add('dragging');
   });
   slot.addEventListener('pointermove', (e) => {
     if (!drag || drag.pointerId !== e.pointerId || drag.trayIndex !== -1) return;
@@ -1550,6 +1572,9 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
       }
       resetHintTimer();
       return;
+    }
+    if (trayIndex < 0 && game.hold) {
+      showToast('Drag this piece onto the board — no need to swap');
     }
     paintTray();
     paintHold();
@@ -1661,12 +1686,37 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
 }
 
 async function openUpdateDownload(info: UpdateInfo): Promise<void> {
-  const url = info.apkUrl || info.releaseUrl;
+  if (!info.apkUrl) {
+    try {
+      await ApkInstaller.openUrl({ url: info.releaseUrl });
+    } catch {
+      window.open(info.releaseUrl, '_blank', 'noopener');
+    }
+    return;
+  }
+
+  showToast('Downloading update…');
   try {
-    const { Browser } = await import('@capacitor/browser');
-    await Browser.open({ url });
+    const result = await ApkInstaller.downloadAndInstall({ url: info.apkUrl });
+    if (result.status === 'need-permission') {
+      showToast('Allow ClearNine to install apps, then tap Download again');
+    } else if (result.status === 'ok') {
+      showToast('Tap Install on the next screen');
+    } else {
+      showToast(result.message || 'Download failed — opening GitHub');
+      try {
+        await ApkInstaller.openUrl({ url: info.releaseUrl });
+      } catch {
+        window.open(info.releaseUrl, '_blank', 'noopener');
+      }
+    }
   } catch {
-    window.open(url, '_blank');
+    showToast('Could not download — opening GitHub');
+    try {
+      await ApkInstaller.openUrl({ url: info.releaseUrl });
+    } catch {
+      window.open(info.releaseUrl, '_blank', 'noopener');
+    }
   }
 }
 

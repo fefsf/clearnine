@@ -136,7 +136,8 @@ body {
 
 .board,
 .tray,
-.tray-slot {
+.tray-slot,
+.hold-slot {
   touch-action: none;
 }
 
@@ -1166,11 +1167,19 @@ body {
   justify-content: center;
   gap: 0;
   overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
 }
 
 .hold-slot.has-piece {
   border-style: solid;
   border-color: var(--accent);
+  cursor: grab;
+}
+
+.hold-slot.dragging {
+  cursor: grabbing;
 }
 
 .hold-slot.awaiting {

@@ -5,7 +5,7 @@ export const EXPERT_BLURB =
 
 export const EXPERT_FEATURE_LINES = [
   'Harder Today’s Puzzle — denser starters and tougher piece deals',
-  'Hold slot in Play — park one piece and swap it back later',
+  'Hold slot in Play — park one piece, then drag it onto the board',
   'Rising pressure — larger pieces show up more as your score climbs',
   'Weekly Mandate — a new named challenge each week (rules rotate)',
   'Endgame Sprint — start on a crowded board and fight for space',

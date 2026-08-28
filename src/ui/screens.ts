@@ -204,7 +204,7 @@ export function renderHowTo(root: HTMLElement, h: ScreenHandlers, expert = false
               </li>
               <li>
                 <strong>Place later</strong>
-                <span>Drag from Hold onto the board when you’re ready.</span>
+                <span>Drag the parked piece from Hold onto the board — you don’t have to swap it back first.</span>
               </li>
               <li>
                 <strong>Swap</strong>
@@ -587,9 +587,11 @@ export function askUpdateAvailable(opts: {
   notes?: string;
 }): Promise<UpdateDialogChoice> {
   return new Promise((resolve) => {
+    const how =
+      `<p class="confirm-msg">Downloads the APK in the app, then opens Android’s installer (not an automatic Play Store update). Allow ClearNine to install apps if asked.</p>`;
     const note = opts.notes
       ? `<p class="confirm-msg update-notes">${escapeHtml(opts.notes.slice(0, 280))}${opts.notes.length > 280 ? '…' : ''}</p>`
-      : `<p class="confirm-msg">Opens the GitHub release so you can download the APK and install it over this app (not an automatic update).</p>`;
+      : '';
     const wrap = document.createElement('div');
     wrap.className = 'overlay show confirm-overlay';
     wrap.innerHTML = `
@@ -597,7 +599,8 @@ export function askUpdateAvailable(opts: {
         <h2>Update available</h2>
         <p class="confirm-msg"><strong>ClearNine v${escapeHtml(opts.version)}</strong> is out (you have v${APP_VERSION}).</p>
         ${note}
-        <button type="button" class="primary-btn" id="update-download">Open download page</button>
+        ${how}
+        <button type="button" class="primary-btn" id="update-download">Download APK</button>
         <button type="button" class="secondary-btn" id="update-later">Remind me later</button>
         <button type="button" class="secondary-btn" id="update-skip">Skip this version</button>
       </div>`;
