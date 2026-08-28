@@ -45,7 +45,7 @@ import {
 } from './ui/screens';
 import { setStorageFailHandler } from './app/storage';
 import { ApkInstaller } from './app/apk-installer';
-import { checkForUpdate, skipVersion, type UpdateInfo } from './app/update';
+import { checkForUpdate, skipVersion, snoozeVersion, type UpdateInfo } from './app/update';
 import { APP_VERSION } from './app/version';
 import { App } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
@@ -1772,6 +1772,8 @@ async function promptUpdate(info: UpdateInfo): Promise<void> {
   } else if (choice === 'skip') {
     skipVersion(info.version);
     showToast(`Won't ask about ${info.version} again`);
+  } else if (choice === 'later') {
+    snoozeVersion(info.version);
   }
 }
 

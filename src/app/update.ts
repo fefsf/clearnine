@@ -2,9 +2,9 @@ import { writeLocal } from './storage';
 import { APP_VERSION } from './version';
 
 const RELEASES_URL = 'https://api.github.com/repos/fefsf/clearnine/releases/latest';
-const CHECK_COOLDOWN_MS = 24 * 60 * 60 * 1000;
-const STORAGE_LAST_CHECK = 'clearnine-update-last-check';
+const SNOOZE_MS = 24 * 60 * 60 * 1000;
 const STORAGE_SKIPPED = 'clearnine-update-skipped';
+const STORAGE_SNOOZE = 'clearnine-update-snooze';
 
 export type UpdateInfo = {
   version: string;
@@ -48,20 +48,21 @@ export function skipVersion(version: string): void {
   writeLocal(STORAGE_SKIPPED, version);
 }
 
-function shouldAutoCheck(): boolean {
-  try {
-    const raw = localStorage.getItem(STORAGE_LAST_CHECK);
-    if (!raw) return true;
-    const last = Number(raw);
-    if (!Number.isFinite(last)) return true;
-    return Date.now() - last >= CHECK_COOLDOWN_MS;
-  } catch {
-    return true;
-  }
+/** Don’t auto-prompt this version again until the snooze window ends. */
+export function snoozeVersion(version: string): void {
+  writeLocal(STORAGE_SNOOZE, JSON.stringify({ version, at: Date.now() }));
 }
 
-function markChecked(): void {
-  writeLocal(STORAGE_LAST_CHECK, String(Date.now()));
+export function isSnoozed(version: string, now: number = Date.now()): boolean {
+  try {
+    const raw = localStorage.getItem(STORAGE_SNOOZE);
+    if (!raw) return false;
+    const data = JSON.parse(raw) as { version?: string; at?: number };
+    if (data.version !== version || typeof data.at !== 'number') return false;
+    return now - data.at < SNOOZE_MS;
+  } catch {
+    return false;
+  }
 }
 
 type GhRelease = {
@@ -111,26 +112,24 @@ export async function checkForUpdate(opts?: {
   const force = opts?.force ?? false;
   const respectSkip = opts?.respectSkip ?? true;
 
-  if (!force && !shouldAutoCheck()) {
-    return { status: 'up-to-date' };
-  }
-
   if (!navigator.onLine) {
     return { status: 'offline' };
   }
 
   try {
     const info = await fetchLatestRelease();
-    markChecked();
     if (!info || !isNewerVersion(info.version)) {
       return { status: 'up-to-date' };
     }
     if (respectSkip && getSkippedVersion() === info.version) {
       return { status: 'skipped', info };
     }
+    // Settings (force) still shows; launch won't nag the same version after "later".
+    if (!force && isSnoozed(info.version)) {
+      return { status: 'skipped', info };
+    }
     return { status: 'update', info };
   } catch (err) {
-    // Do not stamp cooldown on failure — auto-check should retry next launch.
     const message = err instanceof Error ? err.message : 'Could not reach GitHub';
     return { status: 'error', message };
   }
