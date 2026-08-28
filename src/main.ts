@@ -38,6 +38,7 @@ import {
   showSplash,
   showToast,
   showTutorial,
+  showUpdateDownloadProgress,
   transitionScreen,
   type ScreenHandlers,
 } from './ui/screens';
@@ -1685,37 +1686,59 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
   }
 }
 
+async function openGithubRelease(url: string): Promise<void> {
+  try {
+    await ApkInstaller.openUrl({ url });
+  } catch {
+    window.open(url, '_blank', 'noopener');
+  }
+}
+
 async function openUpdateDownload(info: UpdateInfo): Promise<void> {
   if (!info.apkUrl) {
-    try {
-      await ApkInstaller.openUrl({ url: info.releaseUrl });
-    } catch {
-      window.open(info.releaseUrl, '_blank', 'noopener');
-    }
+    await openGithubRelease(info.releaseUrl);
     return;
   }
 
-  showToast('Downloading update…');
+  let openedGithub = false;
+  const ui = showUpdateDownloadProgress({
+    onOpenGithub: () => {
+      openedGithub = true;
+      void ApkInstaller.cancelDownload().finally(() => {
+        void openGithubRelease(info.releaseUrl);
+      });
+      ui.close();
+    },
+  });
+
+  let progressHandle: { remove: () => Promise<void> } | null = null;
   try {
+    progressHandle = await ApkInstaller.addListener('downloadProgress', (p) => {
+      ui.setProgress(p.received, p.total);
+    });
     const result = await ApkInstaller.downloadAndInstall({ url: info.apkUrl });
+    if (openedGithub || result.status === 'cancelled') {
+      return;
+    }
     if (result.status === 'need-permission') {
       showToast('Allow ClearNine to install apps, then tap Download again');
     } else if (result.status === 'ok') {
       showToast('Tap Install on the next screen');
     } else {
       showToast(result.message || 'Download failed — opening GitHub');
-      try {
-        await ApkInstaller.openUrl({ url: info.releaseUrl });
-      } catch {
-        window.open(info.releaseUrl, '_blank', 'noopener');
-      }
+      await openGithubRelease(info.releaseUrl);
     }
   } catch {
-    showToast('Could not download — opening GitHub');
+    if (!openedGithub) {
+      showToast('Could not download — opening GitHub');
+      await openGithubRelease(info.releaseUrl);
+    }
+  } finally {
+    ui.close();
     try {
-      await ApkInstaller.openUrl({ url: info.releaseUrl });
+      await progressHandle?.remove();
     } catch {
-      window.open(info.releaseUrl, '_blank', 'noopener');
+      /* plugin may already be gone */
     }
   }
 }
@@ -1727,6 +1750,8 @@ async function promptUpdate(info: UpdateInfo): Promise<void> {
   });
   if (choice === 'download') {
     await openUpdateDownload(info);
+  } else if (choice === 'github') {
+    await openGithubRelease(info.releaseUrl);
   } else if (choice === 'skip') {
     skipVersion(info.version);
     showToast(`Won't ask about ${info.version} again`);

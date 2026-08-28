@@ -580,7 +580,7 @@ export function askConfirm(message: string): Promise<boolean> {
   });
 }
 
-export type UpdateDialogChoice = 'download' | 'later' | 'skip';
+export type UpdateDialogChoice = 'download' | 'github' | 'later' | 'skip';
 
 export function askUpdateAvailable(opts: {
   version: string;
@@ -588,7 +588,7 @@ export function askUpdateAvailable(opts: {
 }): Promise<UpdateDialogChoice> {
   return new Promise((resolve) => {
     const how =
-      `<p class="confirm-msg">Downloads the APK in the app, then opens Android’s installer (not an automatic Play Store update). Allow ClearNine to install apps if asked.</p>`;
+      `<p class="confirm-msg">Download APK installs from inside ClearNine. Open GitHub uses the release page in your browser — use that if a download ever stalls.</p>`;
     const note = opts.notes
       ? `<p class="confirm-msg update-notes">${escapeHtml(opts.notes.slice(0, 280))}${opts.notes.length > 280 ? '…' : ''}</p>`
       : '';
@@ -601,6 +601,7 @@ export function askUpdateAvailable(opts: {
         ${note}
         ${how}
         <button type="button" class="primary-btn" id="update-download">Download APK</button>
+        <button type="button" class="secondary-btn" id="update-github">Open GitHub</button>
         <button type="button" class="secondary-btn" id="update-later">Remind me later</button>
         <button type="button" class="secondary-btn" id="update-skip">Skip this version</button>
       </div>`;
@@ -610,9 +611,53 @@ export function askUpdateAvailable(opts: {
       resolve(v);
     };
     wrap.querySelector('#update-download')!.addEventListener('click', () => done('download'));
+    wrap.querySelector('#update-github')!.addEventListener('click', () => done('github'));
     wrap.querySelector('#update-later')!.addEventListener('click', () => done('later'));
     wrap.querySelector('#update-skip')!.addEventListener('click', () => done('skip'));
   });
+}
+
+export type UpdateDownloadProgressUi = {
+  setProgress: (received: number, total: number) => void;
+  close: () => void;
+};
+
+export function showUpdateDownloadProgress(opts: {
+  onOpenGithub: () => void;
+}): UpdateDownloadProgressUi {
+  const wrap = document.createElement('div');
+  wrap.className = 'overlay show confirm-overlay';
+  wrap.innerHTML = `
+    <div class="dialog" role="alertdialog" aria-modal="true">
+      <h2>Downloading update</h2>
+      <p class="confirm-msg" id="update-dl-status">Starting…</p>
+      <div class="update-dl-bar" aria-hidden="true"><div class="update-dl-bar-fill" id="update-dl-fill"></div></div>
+      <button type="button" class="secondary-btn" id="update-dl-github">Open GitHub instead</button>
+    </div>`;
+  document.body.appendChild(wrap);
+  const status = wrap.querySelector('#update-dl-status') as HTMLParagraphElement;
+  const fill = wrap.querySelector('#update-dl-fill') as HTMLDivElement;
+  wrap.querySelector('#update-dl-github')!.addEventListener('click', () => opts.onOpenGithub());
+
+  return {
+    setProgress(received, total) {
+      if (total > 0) {
+        const pct = Math.max(0, Math.min(100, (received / total) * 100));
+        fill.style.width = `${pct}%`;
+        status.textContent = `${formatMb(received)} / ${formatMb(total)}`;
+      } else {
+        fill.style.width = received > 0 ? '40%' : '8%';
+        status.textContent = received > 0 ? formatMb(received) : 'Starting…';
+      }
+    },
+    close() {
+      wrap.remove();
+    },
+  };
+}
+
+function formatMb(bytes: number): string {
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
 function escapeHtml(s: string): string {
