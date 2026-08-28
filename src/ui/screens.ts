@@ -435,6 +435,7 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
       <header class="panel-head">
         ${backButton()}
       </header>
+      <p class="settings-thanks" role="note">Special thanks to <strong>RAREBERT</strong> FOR QA TESTING</p>
       <h2 class="panel-title">Settings</h2>
       <p class="panel-lead">Tune sound, feel, and challenge.</p>
       <div class="panel-body settings-list">
