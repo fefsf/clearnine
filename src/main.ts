@@ -644,15 +644,16 @@ function previewCellPx(
   cols: number,
   rows: number,
   fallback: number,
+  minPx = 10,
 ): number {
   const w = host.clientWidth;
   const h = host.clientHeight;
-  if (w < 24 || h < 24) return fallback;
+  if (w < 16 || h < 16) return Math.min(fallback, minPx);
   const gap = 2;
-  const pad = 8;
+  const pad = 4;
   const byW = Math.floor((w - pad - gap * Math.max(0, cols - 1)) / Math.max(1, cols));
   const byH = Math.floor((h - pad - gap * Math.max(0, rows - 1)) / Math.max(1, rows));
-  return Math.max(10, Math.min(fallback, byW, byH));
+  return Math.max(minPx, Math.min(fallback, byW, byH));
 }
 
 function paintTray(animateIn = false): void {
@@ -703,9 +704,9 @@ function paintHold(): void {
     return;
   }
   const { rows, cols } = pieceBounds(game.hold.cells);
-  const fallback = cols >= 5 ? 14 : cols >= 4 ? 18 : 22;
-  const cellPx = previewCellPx(holdPreview, cols, rows, fallback);
-  holdPreview.innerHTML = piecePreviewHtml(game.hold, cellPx);
+  const fallback = cols >= 5 || rows >= 4 ? 10 : cols >= 4 || rows >= 3 ? 12 : 14;
+  const cellPx = previewCellPx(holdPreview, cols, rows, fallback, 6);
+  holdPreview.innerHTML = piecePreviewHtml(game.hold, cellPx, 2);
 }
 
 function animateScoreTo(target: number): void {
@@ -1428,6 +1429,7 @@ function bindHoldDrag(slot: HTMLButtonElement): void {
         paintTray(swapped.dealt);
         paintHold();
         updateHud(true);
+        fitBoardToWrap();
         if (swapped.dealt) sfx.refill();
         if (swapped.dealt && game.hold) {
           showToast('New pieces dealt — drag Hold onto the board anytime');

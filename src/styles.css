@@ -1142,23 +1142,30 @@ body {
   gap: 10px;
   flex-shrink: 0;
   margin: 2px 0 4px;
+  min-height: 64px;
+  max-height: 64px;
 }
 
 .hold-slot {
-  flex: 0 0 auto;
-  min-width: 88px;
-  min-height: 72px;
+  flex: 0 0 72px;
+  width: 72px;
+  height: 64px;
+  min-width: 72px;
+  min-height: 64px;
+  max-width: 72px;
+  max-height: 64px;
   border: 3px dashed var(--panel-edge);
   border-radius: 14px;
   background: color-mix(in srgb, var(--panel) 85%, black);
   color: var(--text);
   font-family: inherit;
-  padding: 6px 8px;
+  padding: 2px 4px;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 2px;
+  gap: 0;
+  overflow: hidden;
 }
 
 .hold-slot.has-piece {
@@ -1180,10 +1187,14 @@ body {
 }
 
 .hold-preview {
-  min-height: 36px;
+  width: 100%;
+  height: 38px;
+  min-height: 38px;
+  max-height: 38px;
   display: flex;
   align-items: center;
   justify-content: center;
+  overflow: hidden;
 }
 
 .hold-empty {
@@ -1199,7 +1210,11 @@ body {
   font-size: 0.82rem;
   font-weight: 700;
   color: var(--text-dim);
-  line-height: 1.3;
+  line-height: 1.25;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .tray-slot.hold-selected {
@@ -2039,17 +2054,26 @@ body {
   .hold-wrap {
     gap: 8px;
     margin: 0 0 2px;
+    min-height: 56px;
+    max-height: 56px;
   }
 
   .hold-slot {
-    min-width: 72px;
+    flex-basis: 64px;
+    width: 64px;
+    height: 56px;
+    min-width: 64px;
     min-height: 56px;
-    padding: 4px 6px;
+    max-width: 64px;
+    max-height: 56px;
+    padding: 2px 4px;
     border-radius: 12px;
   }
 
   .hold-preview {
-    min-height: 28px;
+    height: 32px;
+    min-height: 32px;
+    max-height: 32px;
   }
 
   .hold-hint {
@@ -2146,9 +2170,25 @@ body {
     display: none;
   }
 
+  .hold-wrap {
+    min-height: 52px;
+    max-height: 52px;
+  }
+
   .hold-slot {
-    min-width: 64px;
-    min-height: 48px;
+    flex-basis: 56px;
+    width: 56px;
+    height: 52px;
+    min-width: 56px;
+    min-height: 52px;
+    max-width: 56px;
+    max-height: 52px;
+  }
+
+  .hold-preview {
+    height: 30px;
+    min-height: 30px;
+    max-height: 30px;
   }
 
   .hold-label {
@@ -2187,18 +2227,27 @@ body {
 }
 
 #app.play-compact .hold-slot {
+  flex-basis: 56px;
+  width: 56px;
+  height: 48px;
   min-width: 56px;
-  min-height: 44px;
-  padding: 2px 4px;
+  min-height: 48px;
+  max-width: 56px;
+  max-height: 48px;
+  padding: 2px;
 }
 
 #app.play-compact .hold-preview {
-  min-height: 22px;
+  height: 28px;
+  min-height: 28px;
+  max-height: 28px;
 }
 
 #app.play-compact .hold-wrap {
   margin: 0;
   gap: 6px;
+  min-height: 48px;
+  max-height: 48px;
 }
 
 #app.play-compact .tray {
