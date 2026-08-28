@@ -69,6 +69,20 @@ describe('Phase 4 polish regressions', () => {
     setStorageFailHandler(null);
   });
 
+  it('parking the last tray piece refills the tray', () => {
+    const game = new Game();
+    game.configure('classic', { expert: true });
+    game.newGame();
+    const last = game.tray.find((p): p is NonNullable<typeof p> => p != null);
+    if (!last) throw new Error('expected a tray piece');
+    const parkedId = last.id;
+    game.tray = [last, null, null];
+    const result = game.swapHold(0);
+    expect(result).toEqual({ ok: true, dealt: true });
+    expect(game.hold?.id).toBe(parkedId);
+    expect(game.tray.filter((p) => p != null)).toHaveLength(3);
+  });
+
   it('L5: missing seenTutorial defaults to false (show tutorial)', () => {
     localStorage.setItem(
       'clearnine-profile',

@@ -686,6 +686,18 @@ function paintHold(): void {
   if (!holdPreview || !holdSlotBtn) return;
   holdSlotBtn.classList.toggle('has-piece', !!game.hold);
   holdSlotBtn.classList.toggle('awaiting', selectedTrayForHold !== null);
+  const holdHint = app.querySelector('.hold-hint');
+  if (holdHint) {
+    if (selectedTrayForHold !== null) {
+      holdHint.textContent = game.hold
+        ? 'Tap Hold to swap with the parked piece'
+        : 'Tap Hold to park it';
+    } else if (game.hold) {
+      holdHint.textContent = 'Drag Hold onto the board — or tap a tray piece to swap';
+    } else {
+      holdHint.textContent = 'Tap a tray piece, then Hold to park it';
+    }
+  }
   if (!game.hold) {
     holdPreview.innerHTML = '<span class="hold-empty">+</span>';
     return;
@@ -1408,14 +1420,22 @@ function bindHoldDrag(slot: HTMLButtonElement): void {
     // Tap Hold with a selected tray piece → park / swap
     if (selectedTrayForHold !== null) {
       e.preventDefault();
-      if (game.swapHold(selectedTrayForHold)) {
+      const swapped = game.swapHold(selectedTrayForHold);
+      if (swapped.ok) {
         selectedTrayForHold = null;
         sfx.tap();
         hapticTap();
-        paintTray();
+        paintTray(swapped.dealt);
         paintHold();
         updateHud(true);
-        resetHintTimer();
+        if (swapped.dealt) sfx.refill();
+        if (swapped.dealt && game.hold) {
+          showToast('New pieces dealt — drag Hold onto the board anytime');
+        } else if (game.hold) {
+          showToast('Parked — drag Hold onto the board when you’re ready');
+        }
+        if (game.gameOver) showGameOver();
+        else resetHintTimer();
       }
       return;
     }

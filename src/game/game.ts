@@ -341,18 +341,34 @@ export class Game {
     };
   }
 
-  /** Swap hold with tray slot (or park tray piece into empty hold). */
-  swapHold(trayIndex: number): boolean {
-    if (!this.holdEnabled() || this.gameOver) return false;
-    if (trayIndex < 0 || trayIndex >= this.tray.length) return false;
+  /**
+   * Swap hold with tray slot (or park tray piece into empty hold).
+   * Parking the last tray piece refills the tray, same as placing the last piece.
+   */
+  swapHold(trayIndex: number): { ok: true; dealt: boolean } | { ok: false } {
+    if (!this.holdEnabled() || this.gameOver) return { ok: false };
+    if (trayIndex < 0 || trayIndex >= this.tray.length) return { ok: false };
     const trayPiece = this.tray[trayIndex];
-    if (!trayPiece && !this.hold) return false;
+    if (!trayPiece && !this.hold) return { ok: false };
 
     this.pushUndo('swap');
     this.tray[trayIndex] = this.hold;
     this.hold = trayPiece;
+
+    let dealt = false;
+    if (this.tray.every((s) => s === null)) {
+      this.tray = this.deal();
+      dealt = true;
+    }
+
+    if (!anyTrayPieceFits(this.board, this.tray)) {
+      if (!this.hold || !pieceFitsHold(this.board, this.hold)) {
+        this.gameOver = true;
+      }
+    }
+
     this.persist();
-    return true;
+    return { ok: true, dealt };
   }
 
   canUndo(): boolean {
