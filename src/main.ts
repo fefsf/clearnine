@@ -39,6 +39,7 @@ import {
   showToast,
   showTutorial,
   showUpdateDownloadProgress,
+  handleOverlayBack,
   transitionScreen,
   type ScreenHandlers,
 } from './ui/screens';
@@ -46,6 +47,8 @@ import { setStorageFailHandler } from './app/storage';
 import { ApkInstaller } from './app/apk-installer';
 import { checkForUpdate, skipVersion, type UpdateInfo } from './app/update';
 import { APP_VERSION } from './app/version';
+import { App } from '@capacitor/app';
+import { Capacitor } from '@capacitor/core';
 import './styles.css';
 
 const COLOR_CLASS = (n: number) => `filled-${n}`;
@@ -164,11 +167,15 @@ async function beginMode(mode: GameMode): Promise<void> {
   startPlay(mode, false);
 }
 
+type AppView = 'home' | 'play' | 'panel';
+let appView: AppView = 'home';
+
 function showHome(): void {
   stopHintTimer();
   teardownPlayLayout();
   teardownHomeLayout();
   profile = loadProfile();
+  appView = 'home';
   transitionScreen(app, () => {
     renderHome(app, profile, handlers, findContinueGame(profile.expertMode));
     setupHomeLayout();
@@ -178,30 +185,35 @@ function showHome(): void {
 function showRecords(): void {
   teardownHomeLayout();
   profile = loadProfile();
+  appView = 'panel';
   transitionScreen(app, () => renderRecords(app, profile, handlers));
 }
 
 function showGoals(): void {
   teardownHomeLayout();
   profile = loadProfile();
+  appView = 'panel';
   transitionScreen(app, () => renderGoals(app, profile, handlers));
 }
 
 function showThemes(): void {
   teardownHomeLayout();
   profile = loadProfile();
+  appView = 'panel';
   transitionScreen(app, () => renderThemes(app, profile, handlers));
 }
 
 function showSettings(): void {
   teardownHomeLayout();
   profile = loadProfile();
+  appView = 'panel';
   transitionScreen(app, () => renderSettings(app, profile, handlers));
 }
 
 function showHowTo(): void {
   teardownHomeLayout();
   profile = loadProfile();
+  appView = 'panel';
   transitionScreen(app, () => renderHowTo(app, handlers, profile.expertMode));
 }
 
@@ -221,6 +233,7 @@ function startPlay(mode: GameMode, resume: boolean): void {
     week: weekKey(),
     expert: profile.expertMode,
   });
+  appView = 'play';
   transitionScreen(app, () => {
     if (session !== playSessionId) return;
     mountPlayUi(mode);
@@ -320,7 +333,7 @@ function mountPlayUi(mode: GameMode): void {
         <button type="button" class="primary-btn" id="again-btn">Play again</button>
         <button type="button" class="secondary-btn" id="over-undo-btn" hidden>Undo last move</button>
         <button type="button" class="secondary-btn" id="share-btn" hidden>Share score</button>
-        <button type="button" class="secondary-btn" id="over-home-btn">Back to menu</button>
+        <button type="button" class="secondary-btn" id="over-home-btn" data-back>Back to menu</button>
       </div>
     </div>
   `;
@@ -1709,6 +1722,10 @@ async function openUpdateDownload(info: UpdateInfo): Promise<void> {
       });
       ui.close();
     },
+    onBack: () => {
+      void ApkInstaller.cancelDownload();
+      ui.close();
+    },
   });
 
   let progressHandle: { remove: () => Promise<void> } | null = null;
@@ -1786,8 +1803,38 @@ async function runUpdateCheck(opts: {
   }
 }
 
+function handleHardwareBack(): void {
+  if (handleOverlayBack()) return;
+  if (appView === 'play') {
+    finalizeGameOverIfNeeded();
+    showHome();
+    return;
+  }
+  if (appView === 'panel') {
+    showHome();
+    return;
+  }
+  if (Capacitor.isNativePlatform()) {
+    void App.exitApp();
+  }
+}
+
+function bindHardwareBack(): void {
+  void App.addListener('backButton', () => {
+    handleHardwareBack();
+  });
+  window.addEventListener('keydown', (e) => {
+    if (e.key !== 'Escape') return;
+    const t = e.target as HTMLElement | null;
+    if (t && t.closest('input, textarea, [contenteditable="true"]')) return;
+    e.preventDefault();
+    handleHardwareBack();
+  });
+}
+
 function boot(): void {
   setStorageFailHandler((message) => showToast(message));
+  bindHardwareBack();
   showSplash(() => {
     showHome();
     if (!profile.seenTutorial) {

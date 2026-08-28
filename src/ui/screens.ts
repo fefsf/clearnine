@@ -497,7 +497,7 @@ export function showTutorial(onDone: () => void): void {
         <li><strong>Clear</strong> full rows, columns, or 3×3 boxes.</li>
         <li><strong>Relax</strong> — no timer, no ads. Just play.</li>
       </ol>
-      <button type="button" class="primary-btn" id="tutorial-go">Got it — let’s play</button>
+      <button type="button" class="primary-btn" id="tutorial-go" data-back>Got it — let’s play</button>
     </div>`;
   document.body.appendChild(wrap);
   wrap.querySelector('#tutorial-go')!.addEventListener('click', () => {
@@ -569,7 +569,7 @@ export function askConfirm(message: string): Promise<boolean> {
         <h2>Please confirm</h2>
         <p class="confirm-msg">${message}</p>
         <button type="button" class="primary-btn" id="confirm-yes">Yes</button>
-        <button type="button" class="secondary-btn" id="confirm-no">No, go back</button>
+        <button type="button" class="secondary-btn" id="confirm-no" data-back>No, go back</button>
       </div>`;
     document.body.appendChild(wrap);
     const done = (v: boolean) => {
@@ -603,7 +603,7 @@ export function askUpdateAvailable(opts: {
         ${how}
         <button type="button" class="primary-btn" id="update-download">Download APK</button>
         <button type="button" class="secondary-btn" id="update-github">Open GitHub</button>
-        <button type="button" class="secondary-btn" id="update-later">Remind me later</button>
+        <button type="button" class="secondary-btn" id="update-later" data-back>Remind me later</button>
         <button type="button" class="secondary-btn" id="update-skip">Skip this version</button>
       </div>`;
     document.body.appendChild(wrap);
@@ -625,9 +625,11 @@ export type UpdateDownloadProgressUi = {
 
 export function showUpdateDownloadProgress(opts: {
   onOpenGithub: () => void;
+  onBack?: () => void;
 }): UpdateDownloadProgressUi {
   const wrap = document.createElement('div');
   wrap.className = 'overlay show confirm-overlay';
+  wrap.setAttribute('data-back-listen', '');
   wrap.innerHTML = `
     <div class="dialog" role="alertdialog" aria-modal="true">
       <h2>Downloading update</h2>
@@ -639,6 +641,9 @@ export function showUpdateDownloadProgress(opts: {
   const status = wrap.querySelector('#update-dl-status') as HTMLParagraphElement;
   const fill = wrap.querySelector('#update-dl-fill') as HTMLDivElement;
   wrap.querySelector('#update-dl-github')!.addEventListener('click', () => opts.onOpenGithub());
+  wrap.addEventListener('cn-android-back', () => {
+    (opts.onBack ?? opts.onOpenGithub)();
+  });
 
   return {
     setProgress(received, total) {
@@ -655,6 +660,23 @@ export function showUpdateDownloadProgress(opts: {
       wrap.remove();
     },
   };
+}
+
+/** Dismiss the topmost dialog. Returns true if a modal consumed the back press. */
+export function handleOverlayBack(): boolean {
+  const overlays = Array.from(document.querySelectorAll<HTMLElement>('.overlay.show'));
+  const top = overlays[overlays.length - 1];
+  if (!top) return false;
+  const btn = top.querySelector<HTMLElement>('[data-back]');
+  if (btn) {
+    btn.click();
+    return true;
+  }
+  if (top.hasAttribute('data-back-listen')) {
+    top.dispatchEvent(new Event('cn-android-back'));
+    return true;
+  }
+  return false;
 }
 
 function formatMb(bytes: number): string {
