@@ -42,3 +42,8 @@ test-*.png
 HANDOFF.md
 .cursorrules
 
+# Leaderboard runtime
+server/data/*.json
+server/data/*.tmp
+server/logs/
+

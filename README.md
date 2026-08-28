@@ -58,7 +58,7 @@ It was built to feel **retail-polished** without the usual mobile-game baggage:
 | Plays fully **offline** | Needs a network for “features” |
 | Large readable UI | Tiny controls and clutter |
 
-> **Promise:** ClearNine will not show ads, sell your data, or nag you with IAPs. Progress stays on your device.
+> **Promise:** ClearNine will not show ads, sell your data, or nag you with IAPs. Progress stays on your device. An optional **Board** only sends a nickname and score if you turn it on.
 
 ---
 
@@ -198,6 +198,7 @@ Expert scores are tracked separately from calm-mode bests, so turning Expert off
 - Sound and vibration toggles in **Settings**
 - **Expert Mode** toggle in Settings — harder options for skilled players; off = original calm game
 - **Check for updates** in Settings — looks up the latest GitHub release (optional; game stays offline otherwise)
+- **Board** — optional friends leaderboard (opt-in name + scores only; play still works offline)
 
 ### Progression (all local)
 

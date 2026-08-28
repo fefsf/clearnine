@@ -40,6 +40,8 @@ export type Profile = {
   haptics: boolean;
   seenTutorial: boolean;
   expertMode: boolean;
+  leaderboardOn: boolean;
+  leaderboardName: string;
 };
 
 const STORAGE_PROFILE = 'clearnine-profile';
@@ -75,6 +77,8 @@ export function defaultProfile(): Profile {
     haptics: true,
     seenTutorial: false,
     expertMode: false,
+    leaderboardOn: false,
+    leaderboardName: '',
   };
 }
 
@@ -96,6 +100,8 @@ export function loadProfile(): Profile {
         unlockedGoals: parsed.unlockedGoals ?? [],
         haptics: parsed.haptics ?? true,
         expertMode: parsed.expertMode ?? false,
+        leaderboardOn: parsed.leaderboardOn ?? false,
+        leaderboardName: typeof parsed.leaderboardName === 'string' ? parsed.leaderboardName : '',
         seenTutorial:
           typeof parsed.seenTutorial === 'boolean'
             ? parsed.seenTutorial

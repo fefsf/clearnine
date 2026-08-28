@@ -40,6 +40,7 @@ import {
   showTutorial,
   showUpdateDownloadProgress,
   handleOverlayBack,
+  renderBoard,
   transitionScreen,
   type ScreenHandlers,
 } from './ui/screens';
@@ -47,6 +48,7 @@ import { setStorageFailHandler } from './app/storage';
 import { ApkInstaller } from './app/apk-installer';
 import { checkForUpdate, skipVersion, snoozeVersion, type UpdateInfo } from './app/update';
 import { APP_VERSION } from './app/version';
+import { fetchBoard, submitScore, type BoardRow, type BoardTab } from './app/leaderboard';
 import { App } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import './styles.css';
@@ -110,6 +112,7 @@ const handlers: ScreenHandlers = {
   onThemes: () => showThemes(),
   onHowTo: () => showHowTo(),
   onSettings: () => showSettings(),
+  onBoard: () => showBoard(),
   onBackHome: () => showHome(),
   onSelectTheme: (id) => {
     if (!isThemeUnlocked(profile, id)) return;
@@ -146,6 +149,21 @@ const handlers: ScreenHandlers = {
         ? 'Expert Mode on — harder options unlocked'
         : 'Expert Mode off — back to the calm game',
     );
+  },
+  onToggleLeaderboard: () => {
+    if (!profile.leaderboardOn && !profile.leaderboardName.trim()) {
+      showToast('Type a Board name first');
+      return;
+    }
+    profile.leaderboardOn = !profile.leaderboardOn;
+    saveProfile(profile);
+    hapticTap();
+    sfx.tap();
+    showToast(profile.leaderboardOn ? 'Board is on — scores can post' : 'Board is off');
+  },
+  onSaveLeaderboardName: (name) => {
+    profile.leaderboardName = name.replace(/\s+/g, ' ').trim().slice(0, 20);
+    saveProfile(profile);
   },
   onCheckUpdate: () => {
     void runUpdateCheck({ force: true, fromSettings: true });
@@ -215,6 +233,34 @@ function showHowTo(): void {
   profile = loadProfile();
   appView = 'panel';
   transitionScreen(app, () => renderHowTo(app, handlers, profile.expertMode));
+}
+
+let boardTab: BoardTab = 'classic';
+let boardFetchId = 0;
+
+function showBoard(): void {
+  teardownHomeLayout();
+  profile = loadProfile();
+  appView = 'panel';
+  const tab = boardTab;
+  const fetchId = ++boardFetchId;
+  const paint = (loading: boolean, error: string | null, rows: BoardRow[]) => {
+    if (appView !== 'panel' || fetchId !== boardFetchId) return;
+    renderBoard(app, profile, handlers, {
+      tab,
+      loading,
+      error,
+      rows,
+      onTab: (next) => {
+        boardTab = next;
+        showBoard();
+      },
+    });
+  };
+  paint(true, null, []);
+  void fetchBoard(tab, todayKey(), weekKey())
+    .then((rows) => paint(false, null, rows))
+    .catch(() => paint(false, 'Can’t reach the Board right now.', []));
 }
 
 function startPlay(mode: GameMode, resume: boolean): void {
@@ -962,6 +1008,32 @@ function finalizeGameOverIfNeeded(): void {
     sfx.gameOver();
   }
   if (game.mode === 'daily') showToast('Daily puzzle finished');
+  void maybeSubmitBoardScore();
+}
+
+async function maybeSubmitBoardScore(): Promise<void> {
+  if (!profile.leaderboardOn) return;
+  const name = profile.leaderboardName.trim();
+  if (!name || game.score < 1) return;
+  const periodKey =
+    game.mode === 'daily' || game.mode === 'weekly' ? game.periodKey : '';
+  try {
+    const result = await submitScore({
+      name,
+      mode: game.mode,
+      expert: game.expert,
+      score: game.score,
+      cleared: sessionClears,
+      periodKey,
+    });
+    if (result.improved && result.rank) {
+      showToast(`Board rank #${result.rank}`);
+    } else if (result.ok) {
+      showToast('Board already has this best');
+    }
+  } catch {
+    showToast('Could not reach the Board');
+  }
 }
 
 function startFresh(): void {

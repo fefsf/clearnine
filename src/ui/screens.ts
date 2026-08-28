@@ -14,6 +14,7 @@ import {
 import { EXPERT_BLURB, EXPERT_FEATURE_LINES, getWeeklyMandate, weekKey } from '../game/expert';
 import { todayKey } from '../game/rng';
 import { APP_VERSION } from '../app/version';
+import type { BoardRow, BoardTab } from '../app/leaderboard';
 
 export { APP_VERSION };
 export type ContinueInfo = { mode: GameMode; score: number };
@@ -29,11 +30,14 @@ export type ScreenHandlers = {
   onThemes: () => void;
   onHowTo: () => void;
   onSettings: () => void;
+  onBoard: () => void;
   onBackHome: () => void;
   onSelectTheme: (id: string) => void;
   onToggleMute: () => void;
   onToggleHaptics: () => void;
   onToggleExpert: () => void;
+  onToggleLeaderboard: () => void;
+  onSaveLeaderboardName: (name: string) => void;
   onCheckUpdate: () => void;
 };
 
@@ -120,19 +124,23 @@ export function renderHome(
           <button type="button" class="menu-btn secondary" id="btn-records">
             <span class="menu-title">My Scores</span>
           </button>
-          <button type="button" class="menu-btn secondary" id="btn-goals">
-            <span class="menu-title">Awards</span>
+          <button type="button" class="menu-btn secondary" id="btn-board">
+            <span class="menu-title">Board</span>
           </button>
         </div>
 
         <div class="menu-row">
+          <button type="button" class="menu-btn secondary" id="btn-goals">
+            <span class="menu-title">Awards</span>
+          </button>
           <button type="button" class="menu-btn secondary" id="btn-themes">
             <span class="menu-title">Colors</span>
           </button>
-          <button type="button" class="menu-btn secondary" id="btn-settings">
-            <span class="menu-title">Settings</span>
-          </button>
         </div>
+
+        <button type="button" class="menu-btn secondary" id="btn-settings">
+          <span class="menu-title">Settings</span>
+        </button>
 
         <button type="button" class="text-btn howto-link" id="btn-howto">
           ${expert ? 'How to Play Expert Mode' : 'How to Play'}
@@ -146,6 +154,7 @@ export function renderHome(
   root.querySelector('#btn-weekly')?.addEventListener('click', h.onWeekly);
   root.querySelector('#btn-blitz')?.addEventListener('click', h.onBlitz);
   root.querySelector('#btn-records')!.addEventListener('click', h.onRecords);
+  root.querySelector('#btn-board')!.addEventListener('click', h.onBoard);
   root.querySelector('#btn-goals')!.addEventListener('click', h.onGoals);
   root.querySelector('#btn-themes')!.addEventListener('click', h.onThemes);
   root.querySelector('#btn-settings')!.addEventListener('click', h.onSettings);
@@ -464,6 +473,17 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
           <span class="menu-title">Check for updates</span>
           <span class="menu-meta">GitHub releases</span>
         </button>
+        <button type="button" class="menu-btn settings-row ${profile.leaderboardOn ? 'expert-on' : ''}" id="btn-toggle-board">
+          <span class="menu-title">Join the Board</span>
+          <span class="menu-meta" id="board-state">${profile.leaderboardOn ? 'On' : 'Off'}</span>
+        </button>
+        <label class="settings-name">
+          <span class="settings-name-label">Board name</span>
+          <input type="text" id="board-name" maxlength="20" autocomplete="nickname" spellcheck="false"
+            placeholder="Shown on the Board"
+            value="${escapeHtml(profile.leaderboardName)}" />
+        </label>
+        <p class="settings-name-hint">Optional. Play stays on your phone. The Board only gets a name and score if this is On.</p>
         <p class="settings-version">ClearNine v${APP_VERSION}</p>
       </div>
     </div>
@@ -484,6 +504,81 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
   });
   root.querySelector('#btn-open-themes')!.addEventListener('click', h.onThemes);
   root.querySelector('#btn-check-update')!.addEventListener('click', h.onCheckUpdate);
+  root.querySelector('#btn-toggle-board')!.addEventListener('click', () => {
+    h.onToggleLeaderboard();
+    const st = root.querySelector('#board-state');
+    const btn = root.querySelector('#btn-toggle-board');
+    if (st) st.textContent = profile.leaderboardOn ? 'On' : 'Off';
+    btn?.classList.toggle('expert-on', profile.leaderboardOn);
+  });
+  const nameInput = root.querySelector<HTMLInputElement>('#board-name');
+  nameInput?.addEventListener('change', () => {
+    h.onSaveLeaderboardName(nameInput.value);
+  });
+}
+
+const BOARD_TABS: { id: BoardTab; label: string }[] = [
+  { id: 'classic', label: 'Play' },
+  { id: 'classic-expert', label: 'Expert' },
+  { id: 'daily', label: 'Daily' },
+  { id: 'daily-expert', label: 'Ex Daily' },
+  { id: 'weekly', label: 'Weekly' },
+  { id: 'blitz', label: 'Endgame' },
+];
+
+export function renderBoard(
+  root: HTMLElement,
+  profile: Profile,
+  h: ScreenHandlers,
+  state: {
+    tab: BoardTab;
+    loading: boolean;
+    error: string | null;
+    rows: BoardRow[];
+    onTab: (tab: BoardTab) => void;
+  },
+): void {
+  const tabs = BOARD_TABS.map(
+    (t) =>
+      `<button type="button" class="board-tab ${state.tab === t.id ? 'on' : ''}" data-tab="${t.id}">${t.label}</button>`,
+  ).join('');
+  let body: string;
+  if (state.loading) {
+    body = `<p class="empty-note">Loading the Board…</p>`;
+  } else if (state.error) {
+    body = `<p class="empty-note">${escapeHtml(state.error)}</p>`;
+  } else if (!state.rows.length) {
+    body = `<p class="empty-note">No scores yet. Turn on Join the Board in Settings, then finish a game.</p>`;
+  } else {
+    body = `<ol class="board-list">${state.rows
+      .map(
+        (r) => `<li class="${r.you ? 'you' : ''}">
+          <span class="board-rank">${r.rank}</span>
+          <span class="board-name">${escapeHtml(r.name)}${r.you ? ' · you' : ''}</span>
+          <span class="board-score">${r.score}</span>
+        </li>`,
+      )
+      .join('')}</ol>`;
+  }
+  const joined = profile.leaderboardOn
+    ? `Playing as ${profile.leaderboardName || '—'} · scores post when a game ends`
+    : 'Off — turn on Join the Board in Settings';
+
+  root.innerHTML = `
+    <div class="screen panel-screen">
+      <header class="panel-head">
+        ${backButton()}
+      </header>
+      <h2 class="panel-title">Board</h2>
+      <p class="panel-lead">${escapeHtml(joined)}</p>
+      <div class="board-tabs">${tabs}</div>
+      <div class="panel-body">${body}</div>
+    </div>
+  `;
+  root.querySelector('#btn-back')!.addEventListener('click', h.onBackHome);
+  root.querySelectorAll<HTMLButtonElement>('.board-tab').forEach((btn) => {
+    btn.addEventListener('click', () => state.onTab(btn.dataset.tab as BoardTab));
+  });
 }
 
 export function showTutorial(onDone: () => void): void {
