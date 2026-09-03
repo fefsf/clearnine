@@ -61,7 +61,7 @@ It was built to feel **retail-polished** without the usual mobile-game baggage:
 | No timers, no energy meters | Artificial pressure and wait timers |
 | No accounts or cloud login | Forced sign-in walls |
 | No tracking or analytics SDKs | Telemetry and ad IDs |
-| Plays fully **offline** | Needs a network for “features” |
+| Plays **offline** (updates and Leaderboard are optional) | Needs a network for “features” |
 | Large readable UI | Tiny controls and clutter |
 
 > **Promise:** ClearNine will not show ads, sell your data, or nag you with IAPs. Progress stays on your device. An optional **Leaderboard** only sends a nickname and score if you turn it on.
@@ -87,11 +87,11 @@ You always have up to **three** shapes in a tray at the bottom of the screen. Th
 - Classic tetrominoes (L, T, S/Z, squares, straights)
 - Larger shapes (5-cell corners, U, plus, long 5-lines, full 3×3)
 
-Pieces are **fixed orientation** — no rotation and no hold queue. Plan with what you have.
+Pieces are **fixed orientation** — no rotation. In the calm game you play what is in the tray. **Expert Mode** adds an optional **Hold** slot to park one piece.
 
 ### The goal
 
-Keep placing pieces and clearing space for as long as you can. Your run ends when **none** of the pieces still in the tray can fit anywhere on the board.
+Keep placing pieces and clearing space for as long as you can. Your run ends when **none** of the pieces still in the tray (or in **Hold**, in Expert Mode) can fit anywhere on the board.
 
 ---
 
@@ -126,10 +126,11 @@ Bigger combos and longer streaks score more — and look flashier (sweeps, spark
 
 ### Undo
 
-- **Classic (Play):** up to **3** undos per game  
-- **Daily:** **1** undo per game  
+- **Play:** up to **3** undos per game  
+- **Daily / Endgame:** **1** undo  
+- **Weekly:** set by that week’s mandate  
 
-Undo reverses your last placement (board, tray, and score).
+Undo reverses your last placement (board, tray, Hold, and score).
 
 ---
 
@@ -150,7 +151,7 @@ One special run each calendar day:
 
 ### Continue
 
-Resume an unfinished Classic or Daily game without losing your board or score.
+Resume an unfinished Play, Daily, Weekly, or Endgame run without losing your board or score. **Continue** still appears after you visit Settings — including if you turn Expert Mode on or off. It loads the game you were actually playing.
 
 ### Expert Mode (optional)
 
@@ -163,7 +164,7 @@ When Expert Mode is on, the home screen also offers **How to Play Expert Mode** 
 | **Expert Play** | Hold slot + **rising pressure** (larger pieces show up more as your score climbs). Separate Expert best score. |
 | **Hold** | Tap a tray piece to select it, then tap **Hold** to park it. Drag from Hold onto the board to place. (Play & Weekly only.) |
 | **Expert Daily** | Harder date-seeded puzzle — denser starters and tougher deals. Separate Expert Daily best. |
-| **Weekly Challenge** | One tough seeded board for the whole week, with Hold. |
+| **Weekly Mandate** | One named, tough seeded board for the whole week, with Hold. |
 | **Endgame Sprint** | Starts on a crowded board for short, intense runs. |
 | **Extra records** | Expert / Weekly / Endgame bests, best combo, best streak in **My Scores**. |
 | **Beat-your-best** | Target line under the scoreboard during Expert runs. |
@@ -203,8 +204,9 @@ Expert scores are tracked separately from calm-mode bests, so turning Expert off
 - Stuck hint: after idle time, the easiest fitting piece gently glows
 - Sound and vibration toggles in **Settings**
 - **Expert Mode** toggle in Settings — harder options for skilled players; off = original calm game
-- **Check for updates** in Settings — looks up the latest GitHub release (optional; game stays offline otherwise)
-- **Leaderboard** — optional friends leaderboard (opt-in name + scores only; play still works offline)
+- **Check for updates** in Settings — looks up the latest GitHub release and can download the APK on the phone (optional; play stays offline otherwise)
+- **Leaderboard** — optional friends list (opt-in name + finished scores only; play still works if the list is unreachable)
+- Android **Back** returns to the menu (or dismisses a dialog) instead of quitting the app
 
 ### Progression (all local)
 
@@ -244,7 +246,7 @@ Every theme uses a **single uniform block color** for a clean, calm look.
 | Combo (2+ clears in one move) | Bonus scales with combo size |
 | Streak (2+ clear-moves in a row) | **+5 × streak level** |
 
-All scoring, saves, and awards live in **on-device storage** (`localStorage`). Nothing is uploaded.
+Scoring, saves, and awards live in **on-device storage**. Nothing is uploaded unless you turn on **Join the Leaderboard** (nickname + finished score only).
 
 ---
 
@@ -268,7 +270,7 @@ Grab the latest signed release:
 
 **[Releases → Latest APK](https://github.com/fefsf/clearnine/releases/latest)**
 
-1. Download `ClearNine-vX.Y.apk` on your phone  
+1. Download `ClearNine-vX.Y.Z.apk` on your phone  
 2. Open the file and allow installs from that source if asked  
 3. Tap **Install**, then open **ClearNine**  
 
@@ -324,7 +326,7 @@ npm run apk:release
 - No accounts  
 - No network requirement to play  
 - No ads or trackers  
-- Scores and settings stay on the device  
+- Scores and settings stay on the device unless you opt into the **Leaderboard**  
 
 ---
 
