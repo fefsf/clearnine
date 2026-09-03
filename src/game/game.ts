@@ -213,7 +213,7 @@ export class Game {
     }
 
     this.tray = this.deal();
-    this.persist();
+    this.writePersist();
   }
 
   /** Restore unfinished save for current mode + expert flag, or start new. */
@@ -453,7 +453,12 @@ export class Game {
     clearSave(this.mode, this.expert);
   }
 
-  private persist(): void {
+  /** Flush in-memory progress (Menu / Back). Safe if nothing has started. */
+  persist(): void {
+    this.writePersist();
+  }
+
+  private writePersist(): void {
     if (this.gameOver) {
       clearSave(this.mode, this.expert);
       return;
@@ -543,18 +548,40 @@ function saveIsContinuable(saved: GameSave | null): saved is GameSave {
   );
 }
 
-/** Unfinished game matching current Expert on/off. */
-export function findContinueGame(expert = false): { mode: GameMode; score: number } | null {
+export type ContinueGame = { mode: GameMode; score: number; expert: boolean };
+
+function continueLanes(preferExpert: boolean): Array<{ mode: GameMode; expert: boolean }> {
+  const expertFirst: Array<{ mode: GameMode; expert: boolean }> = [
+    { mode: 'classic', expert: true },
+    { mode: 'daily', expert: true },
+    { mode: 'weekly', expert: true },
+    { mode: 'blitz', expert: true },
+  ];
+  const calmFirst: Array<{ mode: GameMode; expert: boolean }> = [
+    { mode: 'classic', expert: false },
+    { mode: 'daily', expert: false },
+  ];
+  return preferExpert ? [...expertFirst, ...calmFirst] : [...calmFirst, ...expertFirst];
+}
+
+/** Unfinished game. Prefers the current Expert on/off lane, then the other. */
+export function findContinueGame(preferExpert = false): ContinueGame | null {
   const day = todayKey();
   const week = weekKey();
-  const order: GameMode[] = expert
-    ? ['classic', 'daily', 'weekly', 'blitz']
-    : ['classic', 'daily'];
-  for (const mode of order) {
-    const saved = loadSave(mode, day, week, expert);
+  for (const lane of continueLanes(preferExpert)) {
+    const saved = loadSave(lane.mode, day, week, lane.expert);
     if (saveIsContinuable(saved)) {
-      return { mode, score: saved.score };
+      return { mode: lane.mode, score: saved.score, expert: lane.expert };
     }
+  }
+  return null;
+}
+
+/** Unfinished save for one mode + Expert flag (used before starting a new game). */
+export function findContinueFor(mode: GameMode, expert: boolean): ContinueGame | null {
+  const saved = loadSave(mode, todayKey(), weekKey(), expert);
+  if (saveIsContinuable(saved)) {
+    return { mode, score: saved.score, expert };
   }
   return null;
 }

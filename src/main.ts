@@ -1,5 +1,5 @@
 import { BOARD_SIZE, REGION, findNearestPlacement, pieceFitsAnywhere, type ClearResult } from './game/board';
-import { findContinueGame, Game } from './game/game';
+import { findContinueFor, findContinueGame, Game } from './game/game';
 import { getWeeklyMandate, weekKey } from './game/expert';
 import { evaluateGoals } from './game/goals';
 import { cellCount, colorForPiece, pieceBounds, type PieceDef } from './game/pieces';
@@ -105,7 +105,7 @@ const handlers: ScreenHandlers = {
       showHome();
       return;
     }
-    startPlay(info.mode, true);
+    startPlay(info.mode, true, info.expert);
   },
   onRecords: () => showRecords(),
   onGoals: () => showGoals(),
@@ -171,8 +171,8 @@ const handlers: ScreenHandlers = {
 };
 
 async function beginMode(mode: GameMode): Promise<void> {
-  const cont = findContinueGame(profile.expertMode);
-  if (cont?.mode === mode) {
+  const cont = findContinueFor(mode, profile.expertMode);
+  if (cont) {
     const ok = await askConfirm(
       mode === 'daily'
         ? 'Start a brand new Today’s Puzzle? Your current puzzle will be cleared.'
@@ -189,6 +189,9 @@ type AppView = 'home' | 'play' | 'panel';
 let appView: AppView = 'home';
 
 function showHome(): void {
+  if (appView === 'play' && !game.gameOver) {
+    game.persist();
+  }
   stopHintTimer();
   teardownPlayLayout();
   teardownHomeLayout();
@@ -263,7 +266,7 @@ function showBoard(): void {
     .catch(() => paint(false, 'Can’t reach the leaderboard right now.', []));
 }
 
-function startPlay(mode: GameMode, resume: boolean): void {
+function startPlay(mode: GameMode, resume: boolean, expert = profile.expertMode): void {
   teardownHomeLayout();
   sessionClears = 0;
   cheeredBestThisGame = false;
@@ -277,7 +280,7 @@ function startPlay(mode: GameMode, resume: boolean): void {
   game.configure(mode, {
     dailyDate: todayKey(),
     week: weekKey(),
-    expert: profile.expertMode,
+    expert,
   });
   appView = 'play';
   transitionScreen(app, () => {

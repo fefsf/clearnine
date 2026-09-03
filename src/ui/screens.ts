@@ -17,7 +17,7 @@ import { APP_VERSION } from '../app/version';
 import type { BoardRow, BoardTab } from '../app/leaderboard';
 
 export { APP_VERSION };
-export type ContinueInfo = { mode: GameMode; score: number };
+export type ContinueInfo = { mode: GameMode; score: number; expert?: boolean };
 
 export type ScreenHandlers = {
   onClassic: () => void;
@@ -66,7 +66,7 @@ export function renderHome(
   const continueBtn = continueInfo
     ? `<button type="button" class="menu-btn continue" id="btn-continue">
           <span class="menu-title">Continue</span>
-          <span class="menu-meta">${modeLabel(continueInfo.mode)} · ${continueInfo.score} points so far</span>
+          <span class="menu-meta">${continueInfo.expert ? 'Expert · ' : ''}${modeLabel(continueInfo.mode)} · ${continueInfo.score} points so far</span>
         </button>`
     : '';
 
