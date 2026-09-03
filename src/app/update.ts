@@ -108,9 +108,12 @@ export type UpdateCheckResult =
 export async function checkForUpdate(opts?: {
   force?: boolean;
   respectSkip?: boolean;
+  /** Native PackageManager versionName when the APK already updated but JS did not. */
+  installedVersion?: string;
 }): Promise<UpdateCheckResult> {
   const force = opts?.force ?? false;
   const respectSkip = opts?.respectSkip ?? true;
+  const local = opts?.installedVersion?.trim() || APP_VERSION;
 
   if (!navigator.onLine) {
     return { status: 'offline' };
@@ -118,7 +121,7 @@ export async function checkForUpdate(opts?: {
 
   try {
     const info = await fetchLatestRelease();
-    if (!info || !isNewerVersion(info.version)) {
+    if (!info || !isNewerVersion(info.version, local)) {
       return { status: 'up-to-date' };
     }
     if (respectSkip && getSkippedVersion() === info.version) {

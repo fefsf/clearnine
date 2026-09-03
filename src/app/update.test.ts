@@ -54,6 +54,15 @@ describe('checkForUpdate', () => {
     expect(forced.status).toBe('update');
   });
 
+  it('treats GitHub as current when the installed APK already matches', async () => {
+    stubRelease('1.12.19');
+    const result = await checkForUpdate({
+      force: false,
+      installedVersion: '1.12.19',
+    });
+    expect(result.status).toBe('up-to-date');
+  });
+
   it('does not auto-prompt a skipped version', async () => {
     stubRelease('99.0.0');
     skipVersion('99.0.0');

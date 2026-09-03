@@ -46,7 +46,13 @@ import {
 } from './ui/screens';
 import { setStorageFailHandler } from './app/storage';
 import { ApkInstaller } from './app/apk-installer';
-import { checkForUpdate, skipVersion, snoozeVersion, type UpdateInfo } from './app/update';
+import {
+  checkForUpdate,
+  isNewerVersion,
+  skipVersion,
+  snoozeVersion,
+  type UpdateInfo,
+} from './app/update';
 import { APP_VERSION } from './app/version';
 import { fetchBoard, submitScore, type BoardRow, type BoardTab } from './app/leaderboard';
 import { App } from '@capacitor/app';
@@ -1815,7 +1821,8 @@ async function openUpdateDownload(info: UpdateInfo): Promise<void> {
     if (result.status === 'need-permission') {
       showToast('Allow ClearNine to install apps, then tap Download again');
     } else if (result.status === 'ok') {
-      showToast('Tap Install on the next screen');
+      snoozeVersion(info.version);
+      showToast('Tap Install, then open ClearNine again');
     } else {
       showToast(result.message || 'Download failed — opening GitHub');
       await openGithubRelease(info.releaseUrl);
@@ -1852,6 +1859,38 @@ async function promptUpdate(info: UpdateInfo): Promise<void> {
   }
 }
 
+async function installedAppVersion(): Promise<string> {
+  if (Capacitor.isNativePlatform()) {
+    try {
+      const info = await App.getInfo();
+      const native = info.version?.trim();
+      if (native) {
+        return isNewerVersion(native, APP_VERSION) ? native : APP_VERSION;
+      }
+    } catch {
+      /* web bundle version is enough */
+    }
+  }
+  return APP_VERSION;
+}
+
+/** Old process can survive an in-app APK install; only a fresh process loads new assets. */
+async function restartIfApkNewerThanBundle(): Promise<boolean> {
+  if (!Capacitor.isNativePlatform()) return false;
+  try {
+    const info = await App.getInfo();
+    const native = info.version?.trim();
+    if (!native || !isNewerVersion(native, APP_VERSION)) return false;
+    showToast('Update installed — reopening');
+    window.setTimeout(() => {
+      void App.exitApp();
+    }, 350);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function runUpdateCheck(opts: {
   force?: boolean;
   fromSettings?: boolean;
@@ -1862,6 +1901,7 @@ async function runUpdateCheck(opts: {
   const result = await checkForUpdate({
     force: opts.force ?? false,
     respectSkip: !fromSettings,
+    installedVersion: await installedAppVersion(),
   });
 
   if (result.status === 'update') {
@@ -1912,19 +1952,27 @@ function bindHardwareBack(): void {
 function boot(): void {
   setStorageFailHandler((message) => showToast(message));
   bindHardwareBack();
+  if (Capacitor.isNativePlatform()) {
+    void App.addListener('appStateChange', ({ isActive }) => {
+      if (isActive) void restartIfApkNewerThanBundle();
+    });
+  }
   showSplash(() => {
     showHome();
-    if (!profile.seenTutorial) {
-      showTutorial(() => {
-        profile.seenTutorial = true;
-        saveProfile(profile);
-        hapticTap();
-        sfx.nice();
-        void runUpdateCheck({ force: false });
-      });
-    } else {
+    void (async () => {
+      if (await restartIfApkNewerThanBundle()) return;
+      if (!profile.seenTutorial) {
+        showTutorial(() => {
+          profile.seenTutorial = true;
+          saveProfile(profile);
+          hapticTap();
+          sfx.nice();
+          void runUpdateCheck({ force: false });
+        });
+        return;
+      }
       void runUpdateCheck({ force: false });
-    }
+    })();
   });
 }
 
