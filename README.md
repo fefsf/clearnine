@@ -32,13 +32,19 @@
 ## Screenshots
 
 <p align="center">
-  <img src="docs/screenshots/home.png" alt="ClearNine home screen" width="280" />
+  <img src="docs/screenshots/home.png" alt="ClearNine home screen" width="260" />
   &nbsp;&nbsp;
-  <img src="docs/screenshots/play.png" alt="ClearNine Today’s Puzzle gameplay" width="280" />
+  <img src="docs/screenshots/play.png" alt="ClearNine Today’s Puzzle gameplay" width="260" />
 </p>
 
 <p align="center">
-  <em>Home · Today’s Puzzle</em>
+  <img src="docs/screenshots/settings.png" alt="ClearNine Settings" width="260" />
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/leaderboard.png" alt="ClearNine Leaderboard" width="260" />
+</p>
+
+<p align="center">
+  <em>Home · Today’s Puzzle · Settings · Leaderboard</em>
 </p>
 
 ---
