@@ -81,6 +81,13 @@ describe('Phase 4 polish regressions', () => {
     expect(result).toEqual({ ok: true, dealt: true });
     expect(game.hold?.id).toBe(parkedId);
     expect(game.tray.filter((p) => p != null)).toHaveLength(3);
+    const saved = JSON.parse(localStorage.getItem('clearnine-save-classic-expert') ?? '{}') as {
+      undoStack?: unknown[];
+      hold?: { id?: string };
+    };
+    expect(saved.undoStack ?? []).toEqual([]);
+    expect(saved.hold?.id).toBe(parkedId);
+    expect(game.canUndo()).toBe(true);
   });
 
   it('L5: missing seenTutorial defaults to false (show tutorial)', () => {
@@ -93,5 +100,10 @@ describe('Phase 4 polish regressions', () => {
     profile.seenTutorial = true;
     saveProfile(profile);
     expect(loadProfile().seenTutorial).toBe(true);
+  });
+
+  it('Hold coach defaults off for existing profiles', () => {
+    localStorage.setItem('clearnine-profile', JSON.stringify({ bestClassic: 1 }));
+    expect(loadProfile().seenHoldCoach).toBe(false);
   });
 });

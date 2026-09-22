@@ -39,6 +39,7 @@ export type Profile = {
   mute: boolean;
   haptics: boolean;
   seenTutorial: boolean;
+  seenHoldCoach: boolean;
   expertMode: boolean;
   leaderboardOn: boolean;
   leaderboardName: string;
@@ -76,6 +77,7 @@ export function defaultProfile(): Profile {
     mute: false,
     haptics: true,
     seenTutorial: false,
+    seenHoldCoach: false,
     expertMode: false,
     leaderboardOn: false,
     leaderboardName: '',
@@ -106,6 +108,7 @@ export function loadProfile(): Profile {
           typeof parsed.seenTutorial === 'boolean'
             ? parsed.seenTutorial
             : false,
+        seenHoldCoach: parsed.seenHoldCoach === true,
       };
     }
   } catch {

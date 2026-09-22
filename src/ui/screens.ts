@@ -464,11 +464,12 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
           <span class="menu-title">Expert Mode</span>
           <span class="menu-meta" id="expert-state">${profile.expertMode ? 'On' : 'Off'}</span>
         </button>
-        <div class="expert-explain">
-          <p class="expert-blurb">${EXPERT_BLURB}</p>
+        <p class="expert-blurb">Harder puzzles, a Hold slot, and extra modes. Off returns the calm game.</p>
+        <details class="expert-details">
+          <summary>What Expert Mode adds</summary>
           <ul class="expert-feature-list">${features}</ul>
           <p class="expert-note">Turn Expert Mode off anytime — Play and Daily go back to the original calm rules.</p>
-        </div>
+        </details>
         <button type="button" class="menu-btn settings-row" id="btn-check-update">
           <span class="menu-title">Check for updates</span>
           <span class="menu-meta">GitHub releases</span>
@@ -579,6 +580,24 @@ export function renderBoard(
   root.querySelectorAll<HTMLButtonElement>('.board-tab').forEach((btn) => {
     btn.addEventListener('click', () => state.onTab(btn.dataset.tab as BoardTab));
   });
+}
+
+/** Shown once, the first time Hold is on the board. */
+export function showHoldCoach(onDone: () => void): void {
+  const wrap = document.createElement('div');
+  wrap.className = 'overlay show tutorial-overlay';
+  wrap.innerHTML = `
+    <div class="dialog tutorial-dialog" role="dialog" aria-modal="true">
+      <h2>Hold</h2>
+      <p>Tap a tray piece, then tap Hold to park it. Drag the parked piece onto the board when you want it.</p>
+      <button type="button" class="primary-btn" id="hold-coach-ok" data-back>Got it</button>
+    </div>`;
+  document.body.appendChild(wrap);
+  const done = () => {
+    wrap.remove();
+    onDone();
+  };
+  wrap.querySelector('#hold-coach-ok')!.addEventListener('click', done);
 }
 
 export function showTutorial(onDone: () => void): void {

@@ -37,6 +37,7 @@ import {
   renderThemes,
   showSplash,
   showToast,
+  showHoldCoach,
   showTutorial,
   showUpdateDownloadProgress,
   handleOverlayBack,
@@ -59,7 +60,6 @@ import { App } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import './styles.css';
 
-const COLOR_CLASS = (n: number) => `filled-${n}`;
 const HINT_IDLE_MS = 12000;
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
@@ -277,6 +277,7 @@ function startPlay(mode: GameMode, resume: boolean, expert = profile.expertMode)
   sessionClears = 0;
   cheeredBestThisGame = false;
   gameOverFinalized = false;
+  sfx.resetPhrase();
   playSessionId += 1;
   const session = playSessionId;
   if (clearAnimTimer) {
@@ -315,8 +316,17 @@ function startPlay(mode: GameMode, resume: boolean, expert = profile.expertMode)
       }
       boardEl.classList.add('board-enter');
       setTimeout(() => boardEl.classList.remove('board-enter'), 420);
+      maybeShowHoldCoach();
     });
     resetHintTimer();
+  });
+}
+
+function maybeShowHoldCoach(): void {
+  if (!game.holdEnabled() || profile.seenHoldCoach) return;
+  showHoldCoach(() => {
+    profile.seenHoldCoach = true;
+    saveProfile(profile);
   });
 }
 
@@ -484,39 +494,14 @@ function fitHomeLayout(): void {
   const maxD = expert ? 1.02 : 1.12;
   const margin = 6;
 
-  const fits = (d: number): boolean => {
-    screen.style.setProperty('--home-d', d.toFixed(3));
-    return content.scrollHeight <= screen.clientHeight - margin;
-  };
+  // One measure at scale 1. Fonts and gaps track --home-d, so height scales with it.
+  screen.style.setProperty('--home-d', '1');
+  const natural = content.scrollHeight;
+  const avail = screen.clientHeight - margin;
+  const fitted = natural > 0 ? avail / natural : base;
+  const d = Math.min(maxD, Math.max(minD, fitted));
+  screen.style.setProperty('--home-d', d.toFixed(3));
 
-  if (fits(base)) {
-    // Grow toward maxD while it still fits (use spare height on tall phones).
-    let lo = base;
-    let hi = maxD;
-    for (let i = 0; i < 10; i++) {
-      const mid = (lo + hi) / 2;
-      if (fits(mid)) lo = mid;
-      else hi = mid;
-    }
-    screen.style.setProperty('--home-d', lo.toFixed(3));
-  } else {
-    // Shrink from base until it fits.
-    let lo = minD;
-    let hi = base;
-    let best = minD;
-    for (let i = 0; i < 12; i++) {
-      const mid = (lo + hi) / 2;
-      if (fits(mid)) {
-        best = mid;
-        lo = mid;
-      } else {
-        hi = mid;
-      }
-    }
-    screen.style.setProperty('--home-d', best.toFixed(3));
-  }
-
-  // Allow a few px of subpixel / font rounding before treating as clipped.
   const overflow = content.scrollHeight - (screen.clientHeight - margin);
   // Scroll fallback only when density floor still cannot fit.
   screen.classList.toggle('home-scroll', overflow > 4);
@@ -551,6 +536,8 @@ let holdSlotBtn: HTMLElement | null = null;
 let holdPreview: HTMLDivElement | null = null;
 let selectedTrayForHold: number | null = null;
 const cells: HTMLDivElement[] = [];
+/** Last value painted into each cell. -1 means the cell was rebuilt. */
+let painted: number[] = [];
 
 function bindPlayDom(): void {
   boardEl = app.querySelector('#board')!;
@@ -653,6 +640,7 @@ function bindPlayDom(): void {
 function buildBoard(): void {
   boardEl.innerHTML = '';
   cells.length = 0;
+  painted = new Array(BOARD_SIZE * BOARD_SIZE).fill(-1);
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
       const cell = document.createElement('div');
@@ -675,18 +663,35 @@ function cellAt(r: number, c: number): HTMLDivElement {
   return cells[r * BOARD_SIZE + c]!;
 }
 
+const FILL_CLASSES = [
+  'filled-1',
+  'filled-2',
+  'filled-3',
+  'filled-4',
+  'filled-5',
+  'filled-6',
+  'filled-7',
+  'filled-8',
+];
+
 function paintBoard(): void {
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
-      const cell = cellAt(r, c);
+      const i = r * BOARD_SIZE + c;
+      const cell = cells[i]!;
       const v = game.board[r]![c]!;
-      cell.className = 'cell';
-      const br = Math.floor(r / REGION);
-      const bc = Math.floor(c / REGION);
-      if ((br + bc) % 2 === 1) cell.classList.add('region-alt');
-      if ((c + 1) % REGION === 0 && c < BOARD_SIZE - 1) cell.classList.add('region-r');
-      if ((r + 1) % REGION === 0 && r < BOARD_SIZE - 1) cell.classList.add('region-b');
-      if (v > 0) cell.classList.add(COLOR_CLASS(v));
+      const clearing =
+        cell.classList.contains('clearing') || cell.classList.contains('flash-clear');
+      if (painted[i] === v && !clearing) continue;
+      if ((painted[i] ?? 0) > 0 && v === 0) {
+        cell.classList.add('chalk');
+        const el = cell;
+        window.setTimeout(() => el.classList.remove('chalk'), 720);
+      }
+      cell.classList.remove('flash-clear', 'clearing', ...FILL_CLASSES);
+      cell.style.animationDelay = '';
+      if (v > 0) cell.classList.add(FILL_CLASSES[v - 1]!);
+      painted[i] = v;
     }
   }
 }
@@ -750,6 +755,7 @@ function paintTray(animateIn = false): void {
       slot.classList.add('tray-in');
       slot.style.animationDelay = `${i * 70}ms`;
     }
+    if (!pieceFitsAnywhere(game.board, piece)) slot.classList.add('no-fit');
   }
 }
 
@@ -790,6 +796,7 @@ function paintHold(): void {
     }
   }
   if (!game.hold) {
+    holdSlotBtn.classList.remove('no-fit');
     holdPreview.innerHTML = '<span class="hold-empty">+</span>';
     return;
   }
@@ -797,6 +804,7 @@ function paintHold(): void {
   const fallback = cols >= 5 || rows >= 4 ? 10 : cols >= 4 || rows >= 3 ? 12 : 14;
   const cellPx = previewCellPx(holdPreview, cols, rows, fallback, 6);
   holdPreview.innerHTML = piecePreviewHtml(game.hold, cellPx, 2);
+  holdSlotBtn.classList.toggle('no-fit', !pieceFitsAnywhere(game.board, game.hold));
 }
 
 function animateScoreTo(target: number): void {
@@ -1050,6 +1058,7 @@ function startFresh(): void {
   sessionClears = 0;
   cheeredBestThisGame = false;
   gameOverFinalized = false;
+  sfx.resetPhrase();
   selectedTrayForHold = null;
   game.newGame();
   displayedScore = 0;
@@ -1093,21 +1102,21 @@ function spawnClearSparks(cellsList: { r: number; c: number }[]): void {
   const layer = document.createElement('div');
   layer.className = 'spark-layer';
   boardEl.appendChild(layer);
-  for (const { r, c } of cellsList) {
+  const boardRect = boardEl.getBoundingClientRect();
+  const cap = Math.min(12, cellsList.length);
+  for (let n = 0; n < cap; n++) {
+    const { r, c } = cellsList[n]!;
     const cell = cellAt(r, c);
     const rect = cell.getBoundingClientRect();
-    const boardRect = boardEl.getBoundingClientRect();
-    for (let i = 0; i < 3; i++) {
-      const spark = document.createElement('span');
-      spark.className = 'spark';
-      const x = rect.left - boardRect.left + rect.width / 2 + (Math.random() - 0.5) * 12;
-      const y = rect.top - boardRect.top + rect.height / 2 + (Math.random() - 0.5) * 12;
-      spark.style.left = `${x}px`;
-      spark.style.top = `${y}px`;
-      spark.style.setProperty('--sx', `${(Math.random() - 0.5) * 36}px`);
-      spark.style.setProperty('--sy', `${-12 - Math.random() * 28}px`);
-      layer.appendChild(spark);
-    }
+    const spark = document.createElement('span');
+    spark.className = 'spark';
+    const x = rect.left - boardRect.left + rect.width / 2;
+    const y = rect.top - boardRect.top + rect.height / 2;
+    spark.style.left = `${x}px`;
+    spark.style.top = `${y}px`;
+    spark.style.setProperty('--sx', `${(Math.random() - 0.5) * 36}px`);
+    spark.style.setProperty('--sy', `${-12 - Math.random() * 28}px`);
+    layer.appendChild(spark);
   }
   setTimeout(() => layer.remove(), 500);
 }
@@ -1168,7 +1177,7 @@ function playClearSweeps(clears: ClearResult): void {
       bc * REGION + REGION - 1,
     ).getBoundingClientRect();
     addBand(
-      'sweep-box',
+      'region-seal',
       a.left - boardRect.left,
       a.top - boardRect.top,
       b.right - a.left,
@@ -1728,7 +1737,7 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
   saveProfile(profile);
   checkAndToastGoals();
 
-  sfx.place();
+  sfx.place(cellCount(piece.cells));
   hapticPlace();
   paintBoard();
   landPiece(piece, place.row, place.col);
@@ -1746,7 +1755,7 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
       cell.style.animationDelay = `${delay}ms`;
     }
     spawnClearSparks(result.clears.cells);
-    sfx.clear(result.score.comboMultiplier);
+    sfx.clear(result.score.comboMultiplier, result.score.streak);
     hapticClear(result.score.comboMultiplier);
     if (result.score.comboMultiplier >= 2) sfx.whoosh();
     flashBanners(result.score.comboMultiplier, result.score.streak, true);

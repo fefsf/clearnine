@@ -472,10 +472,11 @@ export class Game {
       streak: this.streak,
       gameOver: false,
       undosLeft: this.undosLeft,
-      undoStack: this.undoStack,
       rng: { seed: this.rng.seed, counter: this.rng.counter },
       clearsThisGame: this.clearsThisGame,
       expert: this.expert,
+      // Undo frames stay in memory. Writing them made every move a large save.
+      undoStack: [],
     };
     if (this.mode === 'daily') save.dailyDate = this.dailyDate;
     if (this.mode === 'weekly') save.weekKey = this.weekId;
