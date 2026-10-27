@@ -7,7 +7,12 @@ const STORAGE_SKIPPED = 'clearnine-update-skipped';
 const STORAGE_SNOOZE = 'clearnine-update-snooze';
 /** Written after a successful GitHub check. Automatic checks honor a 24h gap. */
 const STORAGE_LAST_CHECK = 'clearnine-update-last-check';
-const CHECK_BACKOFF_MS = 24 * 60 * 60 * 1000;
+/** Short on purpose: a 24h gap hid brand-new releases from the launch prompt. */
+const CHECK_BACKOFF_MS = 60 * 60 * 1000;
+/** App version that wrote the last-check stamp; a new install re-checks right away. */
+const STORAGE_LAST_CHECK_VERSION = 'clearnine-update-last-check-version';
+/** Latest release seen, so a backoff launch can still prompt for a known update. */
+const STORAGE_LAST_INFO = 'clearnine-update-last-info';
 
 export type UpdateInfo = {
   version: string;
@@ -72,12 +77,39 @@ function lastUpdateCheckAt(): number | null {
 function inUpdateBackoff(now: number = Date.now()): boolean {
   const last = lastUpdateCheckAt();
   if (last == null) return false;
+  try {
+    const stampedBy = localStorage.getItem(STORAGE_LAST_CHECK_VERSION);
+    if (stampedBy && stampedBy !== APP_VERSION) return false;
+  } catch {
+    /* ignore */
+  }
   const elapsed = now - last;
   return elapsed >= 0 && elapsed < CHECK_BACKOFF_MS;
 }
 
-function markUpdateChecked(now: number = Date.now()): void {
+function markUpdateChecked(info: UpdateInfo | null, now: number = Date.now()): void {
   writeLocal(STORAGE_LAST_CHECK, String(now));
+  writeLocal(STORAGE_LAST_CHECK_VERSION, APP_VERSION);
+  writeLocal(STORAGE_LAST_INFO, info ? JSON.stringify(info) : '');
+}
+
+function readCachedInfo(): UpdateInfo | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_LAST_INFO);
+    if (!raw) return null;
+    const data = JSON.parse(raw) as Partial<UpdateInfo>;
+    if (typeof data.version !== 'string' || typeof data.tag !== 'string') return null;
+    return {
+      version: data.version,
+      tag: data.tag,
+      name: typeof data.name === 'string' ? data.name : data.tag,
+      releaseUrl: typeof data.releaseUrl === 'string' ? data.releaseUrl : '',
+      apkUrl: typeof data.apkUrl === 'string' ? data.apkUrl : null,
+      notes: typeof data.notes === 'string' ? data.notes : '',
+    };
+  } catch {
+    return null;
+  }
 }
 
 export function isSnoozed(version: string, now: number = Date.now()): boolean {
@@ -142,18 +174,26 @@ export async function checkForUpdate(opts?: {
   const respectSkip = opts?.respectSkip ?? true;
   const local = opts?.installedVersion?.trim() || APP_VERSION;
 
-  // Settings passes force and must ignore the 24h launch backoff.
-  if (!force && inUpdateBackoff()) {
+  // Settings passes force and must ignore the launch backoff. During backoff we
+  // skip the network but still evaluate the release we already know about, so a
+  // manual check followed by a relaunch still prompts.
+  const backoff = !force && inUpdateBackoff();
+  if (backoff && !readCachedInfo()) {
     return { status: 'up-to-date' };
   }
 
-  if (!navigator.onLine) {
+  if (!backoff && !navigator.onLine) {
     return { status: 'offline' };
   }
 
   try {
-    const info = await fetchLatestRelease();
-    markUpdateChecked();
+    let info: UpdateInfo | null;
+    if (backoff) {
+      info = readCachedInfo();
+    } else {
+      info = await fetchLatestRelease();
+      markUpdateChecked(info);
+    }
     if (!info || !isNewerVersion(info.version, local)) {
       return { status: 'up-to-date' };
     }

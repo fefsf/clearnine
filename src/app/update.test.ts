@@ -44,7 +44,7 @@ describe('checkForUpdate', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 
-  it('records a successful check and skips the network for 24 hours', async () => {
+  it('skips the network during backoff but still prompts for a known newer release', async () => {
     stubRelease('99.0.0');
     const first = await checkForUpdate({ force: false });
     expect(first.status).toBe('update');
@@ -53,7 +53,25 @@ describe('checkForUpdate', () => {
 
     vi.mocked(fetch).mockClear();
     const second = await checkForUpdate({ force: false });
-    expect(second.status).toBe('up-to-date');
+    expect(second.status).toBe('update');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('re-checks immediately after the app version changes', async () => {
+    localStorage.setItem('clearnine-update-last-check', String(Date.now()));
+    localStorage.setItem('clearnine-update-last-check-version', '0.0.1');
+    stubRelease('99.0.0');
+    const result = await checkForUpdate({ force: false });
+    expect(result.status).toBe('update');
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  it('does not nag about a cached release that is no longer newer', async () => {
+    stubRelease('99.0.0');
+    await checkForUpdate({ force: false });
+    vi.mocked(fetch).mockClear();
+    const result = await checkForUpdate({ force: false, installedVersion: '99.0.0' });
+    expect(result.status).toBe('up-to-date');
     expect(fetch).not.toHaveBeenCalled();
   });
 
@@ -66,7 +84,7 @@ describe('checkForUpdate', () => {
   });
 
   it('checks again once the backoff has elapsed', async () => {
-    localStorage.setItem('clearnine-update-last-check', String(Date.now() - 25 * 60 * 60 * 1000));
+    localStorage.setItem('clearnine-update-last-check', String(Date.now() - 2 * 60 * 60 * 1000));
     stubRelease('99.0.0');
     const result = await checkForUpdate({ force: false });
     expect(result.status).toBe('update');
