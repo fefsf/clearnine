@@ -1,4 +1,4 @@
-import { GOALS, isGoalUnlocked } from './goals';
+import { formatGoalProgress, GOALS, isGoalUnlocked } from './goals';
 import type { Profile } from './stats';
 
 export type ThemeDef = {
@@ -31,6 +31,9 @@ const VARIED_HUES: Record<string, readonly string[]> = {
   sunset: ['#f0a05a', '#e11d48', '#f59e0b', '#fb7185', '#f97316', '#c084fc', '#fbbf24', '#e07a7a'],
   forest: ['#8fd18a', '#4ade80', '#a3e635', '#34d399', '#eab308', '#22c55e', '#86efac', '#65a30d'],
   midnight: ['#c9a0e0', '#818cf8', '#7aa8e0', '#e879f9', '#67e8f9', '#a78bfa', '#f0abfc', '#93c5fd'],
+  aurora: ['#8ef0c8', '#67e8f9', '#c4b5fd', '#86efac', '#f0c27a', '#f9a8d4', '#a5f3fc', '#d8b4fe'],
+  ember: ['#ff8f6b', '#ffb088', '#ffd08a', '#fda4af', '#fb923c', '#fde68a', '#fca5a5', '#fdba74'],
+  mono: ['#1c1a17', '#3f3a34', '#514c44', '#2c2822', '#5c564c', '#44403c', '#6a6358', '#29261f'],
   halloween: ['#ff9a3c', '#c084fc', '#facc15', '#a855f7', '#fb923c', '#e879f9', '#fbbf24', '#7c3aed'],
   thanksgiving: ['#ffbf69', '#ea580c', '#fbbf24', '#d97706', '#f59e0b', '#c2410c', '#fcd34d', '#b45309'],
   christmas: ['#ff6b6b', '#3cb371', '#f4fbff', '#ef4444', '#4ade80', '#fecaca', '#22c55e', '#fca5a5'],
@@ -179,6 +182,72 @@ export const THEMES: ThemeDef[] = [
       ...uniformBlocks('#c9a0e0'),
       '--btn-text': '#0d0d18',
       '--status-style': 'light',
+    },
+  },
+  {
+    id: 'aurora',
+    name: 'Aurora',
+    requiresGoal: 'daily_30',
+    vars: {
+      '--bg-top': '#1a2744',
+      '--bg-bot': '#101628',
+      '--panel': '#243056',
+      '--panel-edge': '#687c9a',
+      '--cell-empty': '#182038',
+      '--cell-empty-alt': '#12182c',
+      '--region-line': '#9af0d0',
+      '--text': '#f4f7ff',
+      '--text-dim': '#c9d4ee',
+      '--accent': '#8ef0c8',
+      '--accent-warm': '#d7b4ff',
+      '--danger': '#ff9b9b',
+      ...uniformBlocks('#8ef0c8'),
+      '--btn-text': '#101628',
+      '--status-style': 'light',
+    },
+  },
+  {
+    id: 'ember',
+    name: 'Ember',
+    requiresGoal: 'pieces_1000',
+    vars: {
+      '--bg-top': '#2a1218',
+      '--bg-bot': '#14080c',
+      '--panel': '#3a1c22',
+      '--panel-edge': '#a35a52',
+      '--cell-empty': '#241016',
+      '--cell-empty-alt': '#1a0c10',
+      '--region-line': '#ffb088',
+      '--text': '#fff1ea',
+      '--text-dim': '#f0cfc4',
+      '--accent': '#ff8f6b',
+      '--accent-warm': '#ffd08a',
+      '--danger': '#ffb4b4',
+      ...uniformBlocks('#ff8f6b'),
+      '--btn-text': '#1a0a0c',
+      '--status-style': 'light',
+    },
+  },
+  {
+    id: 'mono',
+    name: 'Mono Ink',
+    requiresGoal: 'cells_25000',
+    vars: {
+      '--bg-top': '#f6f1e8',
+      '--bg-bot': '#e6dfd2',
+      '--panel': '#fffdf8',
+      '--panel-edge': '#9a9286',
+      '--cell-empty': '#efe8dc',
+      '--cell-empty-alt': '#e5dece',
+      '--region-line': '#2a261f',
+      '--text': '#1a1814',
+      '--text-dim': '#5e584e',
+      '--accent': '#2a261f',
+      '--accent-warm': '#e0a36a',
+      '--danger': '#9f1239',
+      ...uniformBlocks('#2c2822'),
+      '--btn-text': '#fffdf8',
+      '--status-style': 'dark',
     },
   },
 ];
@@ -552,9 +621,14 @@ async function syncNativeStatusBar(darkIcons: boolean): Promise<void> {
   }
 }
 
-export function themeUnlockHint(themeId: string): string {
+export function themeUnlockHint(themeId: string, profile?: Profile): string {
   const theme = THEMES.find((t) => t.id === themeId);
   if (!theme?.requiresGoal) return 'Ready to use';
   const goal = GOALS.find((g) => g.id === theme.requiresGoal);
-  return goal ? `Locked — finish award “${goal.title}”` : 'Locked';
+  if (!goal) return 'Locked';
+  const progress = profile ? goal.progress?.(profile) : undefined;
+  if (progress && progress.target > 0) {
+    return `Locked — ${formatGoalProgress(progress)} · ${goal.description}`;
+  }
+  return `Locked — ${goal.description}`;
 }

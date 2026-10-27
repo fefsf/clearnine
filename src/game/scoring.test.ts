@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { createEmptyBoard, findClears, type ClearResult } from './board';
-import { scorePlacement } from './scoring';
+import { Game } from './game';
 import type { PieceDef } from './pieces';
+import { ALL_CLEAR_BONUS, scorePlacement } from './scoring';
+import { defaultProfile, loadProfile, recordPlacement, reversePlacement } from './stats';
 
 function piece(cells: number): PieceDef {
   return {
@@ -69,6 +71,32 @@ describe('scorePlacement', () => {
     expect(next.streakBonus).toBe(10);
     expect(next.total).toBe(4 + 18 + 10);
   });
+
+  it('adds 100 when the placement clears the whole board', () => {
+    const scored = scorePlacement(piece(1), clears(1), 0, true);
+    expect(scored.allClear).toBe(true);
+    expect(scored.allClearBonus).toBe(ALL_CLEAR_BONUS);
+    expect(scored.allClearBonus).toBe(100);
+    expect(scored.total).toBe(1 + 18 + 100);
+    expect(scored.streak).toBe(1);
+
+    const combo = scorePlacement(piece(4), clears(2), 1, true);
+    expect(combo.allClear).toBe(true);
+    expect(combo.total).toBe(4 + 36 + 20 + 10 + 100);
+  });
+
+  it('does not pay all-clear when blocks remain or nothing cleared', () => {
+    const stayed = scorePlacement(piece(3), clears(1), 0, false);
+    expect(stayed.allClear).toBe(false);
+    expect(stayed.allClearBonus).toBe(0);
+    expect(stayed.total).toBe(21);
+
+    const flagged = scorePlacement(piece(2), clears(0), 3, true);
+    expect(flagged.allClear).toBe(false);
+    expect(flagged.allClearBonus).toBe(0);
+    expect(flagged.total).toBe(2);
+    expect(flagged.streak).toBe(0);
+  });
 });
 
 describe('findClears', () => {
@@ -126,5 +154,74 @@ describe('findClears', () => {
     expect(overlap.clearCount).toBe(2);
     expect(overlap.cells).toHaveLength(15);
     expect(new Set(overlap.cells.map((cell) => `${cell.r},${cell.c}`)).size).toBe(15);
+  });
+});
+
+describe('all-clear on the board', () => {
+  const dot: PieceDef = { id: 'dot', cells: [{ r: 0, c: 0 }], weight: 1 };
+
+  function classic(): Game {
+    localStorage.clear();
+    const game = new Game();
+    game.configure('classic', { expert: false });
+    game.newGame();
+    game.tray = [dot, null, null];
+    return game;
+  }
+
+  it('pays the bonus when a placement leaves the board empty', () => {
+    const game = classic();
+    for (let c = 1; c < 9; c++) game.board[0]![c] = 1;
+    const result = game.tryPlace(0, 0, 0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.score.allClear).toBe(true);
+    expect(result.score.allClearBonus).toBe(100);
+    expect(result.score.total).toBe(119);
+    expect(game.score).toBe(119);
+    expect(game.board.every((row) => row.every((cell) => cell === 0))).toBe(true);
+  });
+
+  it('skips the bonus when a block stays behind', () => {
+    const game = classic();
+    for (let c = 1; c < 9; c++) game.board[0]![c] = 1;
+    game.board[4]![4] = 1;
+    const result = game.tryPlace(0, 0, 0);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.score.allClear).toBe(false);
+    expect(result.score.allClearBonus).toBe(0);
+    expect(result.score.total).toBe(19);
+    expect(game.board[4]![4]).toBe(1);
+  });
+});
+
+describe('all-clear stats', () => {
+  it('counts them, undoes them, and defaults older profiles to 0', () => {
+    localStorage.clear();
+    const profile = defaultProfile();
+    expect(profile.stats.allClears).toBe(0);
+    recordPlacement(profile, {
+      combo: 1,
+      streak: 1,
+      clearCount: 1,
+      cellsCleared: 9,
+      allClear: true,
+    });
+    expect(profile.stats.allClears).toBe(1);
+    recordPlacement(profile, { combo: 1, streak: 1, clearCount: 1, cellsCleared: 9 });
+    expect(profile.stats.allClears).toBe(1);
+    reversePlacement(profile, { clearCount: 1, cellsCleared: 9 });
+    expect(profile.stats.allClears).toBe(1);
+    reversePlacement(profile, { clearCount: 1, cellsCleared: 9, allClear: true });
+    expect(profile.stats.allClears).toBe(0);
+
+    localStorage.setItem(
+      'clearnine-profile',
+      JSON.stringify({ stats: { gamesPlayed: 4 } }),
+    );
+    const loaded = loadProfile();
+    expect(loaded.stats.allClears).toBe(0);
+    expect(loaded.stats.gamesPlayed).toBe(4);
   });
 });

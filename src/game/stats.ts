@@ -2,7 +2,23 @@ import { writeLocal } from '../app/storage';
 import { evaluateGoals } from './goals';
 import { addDays, todayKey } from './rng';
 
-export type GameMode = 'classic' | 'daily' | 'weekly' | 'blitz';
+export type GameMode = 'classic' | 'daily' | 'weekly' | 'blitz' | 'puzzle';
+
+/** Calm deal bias. Expert Mode does not use this. */
+export type DealDepth = 'gentle' | 'normal' | 'deep';
+
+/** Unknown or missing values stay on the original calm deal. */
+export function normalizeDealDepth(value: unknown): DealDepth {
+  if (value === 'gentle' || value === 'deep' || value === 'normal') return value;
+  return 'normal';
+}
+
+/** Settings cycle: Gentle → Normal → Deep → Gentle. */
+export function nextDealDepth(depth: DealDepth): DealDepth {
+  if (depth === 'gentle') return 'normal';
+  if (depth === 'normal') return 'deep';
+  return 'gentle';
+}
 
 export type RecentGame = {
   mode: GameMode;
@@ -21,8 +37,12 @@ export type LifetimeStats = {
   maxStreak: number;
   /** Dates (YYYY-MM-DD) with at least one finished Daily. */
   dailyDates: string[];
+  /** Dates the Today’s Puzzle bonus goal was met. Older saves omit this. */
+  dailyGoalsMet: string[];
   /** Week keys with a finished Weekly Challenge. */
   weeklyKeys: string[];
+  /** Placements that left the board empty. Older saves omit this (treated as 0). */
+  allClears: number;
 };
 
 /** Stored Profile shape. Older saves omit this and migrate to 1. */
@@ -50,8 +70,17 @@ export type Profile = {
   seenTutorial: boolean;
   seenHoldCoach: boolean;
   expertMode: boolean;
+  /** Calm Hold slot on Play. Expert Mode already includes Hold and ignores this. */
+  holdOption: boolean;
+  /**
+   * Calm deal bias. 'normal' is the original weights. Expert Mode ignores this
+   * and keeps rising pressure, Weekly, and Endgame.
+   */
+  dealDepth: DealDepth;
   leaderboardOn: boolean;
   leaderboardName: string;
+  /** Best move counts for solved puzzle-pack ids. Missing on older saves. */
+  puzzlesSolved: Record<string, { moves: number }>;
 };
 
 const STORAGE_PROFILE = 'clearnine-profile';
@@ -67,7 +96,9 @@ export function emptyStats(): LifetimeStats {
     maxCombo: 0,
     maxStreak: 0,
     dailyDates: [],
+    dailyGoalsMet: [],
     weeklyKeys: [],
+    allClears: 0,
   };
 }
 
@@ -91,8 +122,11 @@ export function defaultProfile(): Profile {
     seenTutorial: false,
     seenHoldCoach: false,
     expertMode: false,
+    holdOption: false,
+    dealDepth: 'normal',
     leaderboardOn: false,
     leaderboardName: '',
+    puzzlesSolved: {},
   };
 }
 
@@ -164,7 +198,32 @@ function leaderboardNameOf(value: unknown): string {
 }
 
 function isMode(value: unknown): value is GameMode {
-  return value === 'classic' || value === 'daily' || value === 'weekly' || value === 'blitz';
+  return (
+    value === 'classic' ||
+    value === 'daily' ||
+    value === 'weekly' ||
+    value === 'blitz' ||
+    value === 'puzzle'
+  );
+}
+
+const PUZZLE_SOLVE_ID = /^[a-z0-9_-]{1,32}$/;
+
+/** Drop unknown ids and non-integer move counts. Older profiles have no map. */
+function migratePuzzlesSolved(value: unknown): Record<string, { moves: number }> {
+  if (!isPlainObject(value)) return {};
+  const out: Record<string, { moves: number }> = {};
+  for (const key of Object.keys(value)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+    if (!PUZZLE_SOLVE_ID.test(key)) continue;
+    const item = value[key];
+    if (!isPlainObject(item)) continue;
+    const moves = item.moves;
+    if (typeof moves !== 'number' || !Number.isInteger(moves) || moves < 0 || moves > 999) continue;
+    out[key] = { moves };
+    if (Object.keys(out).length >= 200) break;
+  }
+  return out;
 }
 
 function migrateStats(value: unknown): LifetimeStats {
@@ -177,7 +236,9 @@ function migrateStats(value: unknown): LifetimeStats {
     maxCombo: countOr(src.maxCombo, 0),
     maxStreak: countOr(src.maxStreak, 0),
     dailyDates: stringList(src.dailyDates, 4000, 32),
+    dailyGoalsMet: dailyGoalDates(src.dailyGoalsMet),
     weeklyKeys: stringList(src.weeklyKeys, 2000, 16),
+    allClears: countOr(src.allClears, 0),
   };
 }
 
@@ -238,8 +299,11 @@ export function migrateProfile(raw: unknown): Profile {
       seenTutorial: flag(src.seenTutorial, false),
       seenHoldCoach: src.seenHoldCoach === true,
       expertMode: flag(src.expertMode, false),
+      holdOption: flag(src.holdOption, false),
+      dealDepth: normalizeDealDepth(src.dealDepth),
       leaderboardOn: flag(src.leaderboardOn, false),
       leaderboardName: leaderboardNameOf(src.leaderboardName),
+      puzzlesSolved: migratePuzzlesSolved(src.puzzlesSolved),
     };
   } catch {
     return defaultProfile();
@@ -274,6 +338,15 @@ export function saveProfile(profile: Profile): void {
   writeLocal(STORAGE_PROFILE, JSON.stringify(profile));
 }
 
+/** Keep the fewest moves for a solved puzzle. Invalid ids are ignored. */
+export function recordPuzzleSolved(profile: Profile, id: string, moves: number): void {
+  if (!PUZZLE_SOLVE_ID.test(id)) return;
+  if (!Number.isInteger(moves) || moves < 0 || moves > 999) return;
+  const prev = profile.puzzlesSolved[id];
+  if (!prev || moves < prev.moves) profile.puzzlesSolved[id] = { moves };
+  saveProfile(profile);
+}
+
 export function getDailyBest(profile: Profile, date = todayKey(), expert = false): number {
   if (expert) return profile.bestDailyExpert[date] ?? 0;
   return profile.bestDaily[date] ?? 0;
@@ -294,6 +367,44 @@ export function dailyPlayStreak(profile: Profile, today = todayKey()): number {
     cursor = addDays(cursor, -1);
   }
   return streak;
+}
+
+const DAILY_DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
+function isDailyDateKey(key: string): boolean {
+  if (!DAILY_DATE_KEY.test(key)) return false;
+  const year = Number(key.slice(0, 4));
+  const month = Number(key.slice(5, 7));
+  const day = Number(key.slice(8, 10));
+  const date = new Date(year, month - 1, day);
+  return date.getFullYear() === year && date.getMonth() === month - 1 && date.getDate() === day;
+}
+
+/** Valid, unique Daily dates. Junk and repeats from older or edited saves are dropped. */
+function dailyGoalDates(value: unknown): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const item of stringList(value, 4000, 32)) {
+    if (!isDailyDateKey(item) || seen.has(item)) continue;
+    seen.add(item);
+    out.push(item);
+  }
+  out.sort();
+  return out;
+}
+
+/** Longest run of back-to-back Daily finishes, including streaks that already ended. */
+export function longestDailyStreak(profile: Profile): number {
+  const days = [...new Set(profile.stats.dailyDates.filter(isDailyDateKey))].sort();
+  let best = 0;
+  let run = 0;
+  let prev = '';
+  for (const day of days) {
+    run = prev && addDays(prev, 1) === day ? run + 1 : 1;
+    if (run > best) best = run;
+    prev = day;
+  }
+  return best;
 }
 
 type PlacementSnap = {
@@ -325,6 +436,7 @@ export function recordPlacement(
     streak: number;
     clearCount: number;
     cellsCleared: number;
+    allClear?: boolean;
   },
 ): void {
   snapStack(profile).push({
@@ -335,6 +447,7 @@ export function recordPlacement(
   profile.stats.piecesPlaced += 1;
   profile.stats.linesCleared += opts.clearCount;
   profile.stats.cellsCleared += opts.cellsCleared;
+  if (opts.allClear) profile.stats.allClears = (profile.stats.allClears ?? 0) + 1;
   // scorePlacement reports comboMultiplier 1 when the move did not combo.
   if (opts.combo >= 2) {
     profile.stats.maxCombo = Math.max(profile.stats.maxCombo, opts.combo);
@@ -348,11 +461,13 @@ export function reversePlacement(
   opts: {
     clearCount: number;
     cellsCleared: number;
+    allClear?: boolean;
   },
 ): void {
   profile.stats.piecesPlaced = Math.max(0, profile.stats.piecesPlaced - 1);
   profile.stats.linesCleared = Math.max(0, profile.stats.linesCleared - opts.clearCount);
   profile.stats.cellsCleared = Math.max(0, profile.stats.cellsCleared - opts.cellsCleared);
+  if (opts.allClear) profile.stats.allClears = Math.max(0, (profile.stats.allClears ?? 0) - 1);
   const snap = snapStack(profile).pop();
   if (!snap) return;
   profile.stats.maxCombo = snap.maxCombo;
@@ -369,6 +484,10 @@ type PendingFinalize = {
   cleared: number;
   date: string;
   week?: string;
+  /** Calm Hold or non-normal difficulty. Must not become a ranked best. */
+  practice?: boolean;
+  /** Today’s Puzzle bonus goal was met on this finished run. */
+  dailyGoalMet?: boolean;
 };
 
 type FinishOpts = {
@@ -378,6 +497,10 @@ type FinishOpts = {
   date?: string;
   week?: string;
   expert?: boolean;
+  /** Skip best updates. Expert runs ignore this and record as they do today. */
+  practice?: boolean;
+  /** Today’s Puzzle bonus goal was met. Recorded once per date. */
+  dailyGoalMet?: boolean;
 };
 
 type FinishFlags = {
@@ -439,6 +562,8 @@ export function stagePendingFinalize(entry: PendingFinalize): void {
     cleared: entry.cleared,
     date: entry.date,
     week: entry.week,
+    ...(entry.practice ? { practice: true } : {}),
+    ...(entry.dailyGoalMet ? { dailyGoalMet: true } : {}),
   });
   writePending(next);
 }
@@ -462,6 +587,8 @@ function sameFinish(pending: PendingFinalize, opts: FinishOpts): boolean {
   if (pending.score !== opts.score || pending.cleared !== opts.cleared) return false;
   if ((pending.week ?? '') !== (opts.week ?? '')) return false;
   if (opts.mode === 'daily' && opts.date && pending.date !== opts.date) return false;
+  if ((pending.practice === true) !== (opts.practice === true)) return false;
+  if ((pending.dailyGoalMet === true) !== (opts.dailyGoalMet === true)) return false;
   return true;
 }
 
@@ -475,8 +602,21 @@ function settlePendingFinalizes(profile: Profile): boolean {
 }
 
 function commitFinishedGame(profile: Profile, opts: FinishOpts): FinishFlags {
+  const emptyFlags = {
+    newClassicBest: false,
+    newDailyBest: false,
+    newWeeklyBest: false,
+    newBlitzBest: false,
+  };
+  // Puzzle packs keep their own solve map. They must not touch bests,
+  // games played, daily dates, or the recent-score list.
+  if (opts.mode === 'puzzle') return emptyFlags;
+
   const date = opts.date ?? todayKey();
   const expert = opts.expert ?? false;
+  // Calm Hold and Gentle/Deep deals still count as played, but they must not
+  // replace the plain calm bests (or be treated as the fair Daily/Weekly high).
+  const practice = !expert && opts.practice === true;
   profile.stats.gamesPlayed += 1;
 
   let newClassicBest = false;
@@ -485,30 +625,39 @@ function commitFinishedGame(profile: Profile, opts: FinishOpts): FinishFlags {
   let newBlitzBest = false;
 
   if (opts.mode === 'classic') {
-    if (expert) {
+    if (!practice && expert) {
       if (opts.score > profile.bestClassicExpert) {
         profile.bestClassicExpert = opts.score;
         newClassicBest = true;
       }
-    } else if (opts.score > profile.bestClassic) {
+    } else if (!practice && opts.score > profile.bestClassic) {
       profile.bestClassic = opts.score;
       newClassicBest = true;
     }
   } else if (opts.mode === 'daily') {
-    const bag = expert ? profile.bestDailyExpert : profile.bestDaily;
-    const prev = bag[date] ?? 0;
-    if (opts.score > prev) {
-      bag[date] = opts.score;
-      newDailyBest = true;
+    if (!practice) {
+      const bag = expert ? profile.bestDailyExpert : profile.bestDaily;
+      const prev = bag[date] ?? 0;
+      if (opts.score > prev) {
+        bag[date] = opts.score;
+        newDailyBest = true;
+      }
     }
     if (!profile.stats.dailyDates.includes(date)) {
       profile.stats.dailyDates.push(date);
       profile.stats.dailyDates.sort();
     }
+    if (opts.dailyGoalMet === true && isDailyDateKey(date)) {
+      if (!Array.isArray(profile.stats.dailyGoalsMet)) profile.stats.dailyGoalsMet = [];
+      if (!profile.stats.dailyGoalsMet.includes(date)) {
+        profile.stats.dailyGoalsMet.push(date);
+        profile.stats.dailyGoalsMet.sort();
+      }
+    }
   } else if (opts.mode === 'weekly') {
     const week = opts.week ?? date;
     const prev = profile.bestWeekly[week] ?? 0;
-    if (opts.score > prev) {
+    if (!practice && opts.score > prev) {
       profile.bestWeekly[week] = opts.score;
       newWeeklyBest = true;
     }
@@ -517,7 +666,7 @@ function commitFinishedGame(profile: Profile, opts: FinishOpts): FinishFlags {
       profile.stats.weeklyKeys.sort();
     }
   } else if (opts.mode === 'blitz') {
-    if (opts.score > profile.bestBlitz) {
+    if (!practice && opts.score > profile.bestBlitz) {
       profile.bestBlitz = opts.score;
       newBlitzBest = true;
     }

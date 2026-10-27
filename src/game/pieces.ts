@@ -51,6 +51,17 @@ export const PIECE_CATALOG: PieceDef[] = [
     { r: 2, c: 0 }, { r: 2, c: 1 }, { r: 2, c: 2 },
   ], weight: 2 },
 
+  // 2×3 / 3×2 rectangles (6 cells — not used by starter previews)
+  { id: 'r23', cells: [
+    { r: 0, c: 0 }, { r: 0, c: 1 }, { r: 0, c: 2 },
+    { r: 1, c: 0 }, { r: 1, c: 1 }, { r: 1, c: 2 },
+  ], weight: 3 },
+  { id: 'r32', cells: [
+    { r: 0, c: 0 }, { r: 0, c: 1 },
+    { r: 1, c: 0 }, { r: 1, c: 1 },
+    { r: 2, c: 0 }, { r: 2, c: 1 },
+  ], weight: 3 },
+
   // Straight 4 / 5
   { id: 'h4', cells: [{ r: 0, c: 0 }, { r: 0, c: 1 }, { r: 0, c: 2 }, { r: 0, c: 3 }], weight: 5 },
   { id: 'v4', cells: [{ r: 0, c: 0 }, { r: 1, c: 0 }, { r: 2, c: 0 }, { r: 3, c: 0 }], weight: 5 },
@@ -108,7 +119,21 @@ export type DealOptions = {
   score?: number;
   /** Weekly Mandate deal shape bias. */
   bias?: DealBias;
+  /**
+   * Occupancy grid (0 = empty). Calm deals guarantee one piece fits.
+   * Ignored when `hard` is set, or when `fits` is provided.
+   */
+  board?: number[][];
+  /** Whether a piece can be placed somewhere. Preferred over `board`. */
+  fits?: (piece: PieceDef) => boolean;
 };
+
+/** At most two copies of one shape in a tray (never three identical). */
+const MAX_SAME_SHAPE = 2;
+/** Re-rolls of a third identical shape before a catalog fallback. */
+const SHAPE_REROLLS = 12;
+/** Calm re-deals looking for a piece that fits, then the smallest piece. */
+const KINDNESS_REROLLS = 8;
 
 function weightFor(piece: PieceDef, opts?: DealOptions): number {
   let w = piece.weight;
@@ -148,12 +173,107 @@ export function pickRandomPiece(rng: () => number = Math.random, opts?: DealOpti
   return PIECE_CATALOG[PIECE_CATALOG.length - 1]!;
 }
 
+function copiesOf(tray: PieceDef[], id: string): number {
+  let n = 0;
+  for (const piece of tray) if (piece.id === id) n += 1;
+  return n;
+}
+
+function smallestPiece(): PieceDef {
+  for (const piece of PIECE_CATALOG) {
+    if (piece.id === 'dot') return piece;
+  }
+  let best = PIECE_CATALOG[0]!;
+  for (const piece of PIECE_CATALOG) {
+    if (piece.cells.length < best.cells.length) best = piece;
+  }
+  return best;
+}
+
+/** True when a calm deal should keep one placeable piece. Hard deals opt out. */
+function kindnessActive(opts?: DealOptions): opts is DealOptions {
+  if (!opts || opts.hard) return false;
+  return typeof opts.fits === 'function' || opts.board != null;
+}
+
+function pieceFitsOnBoard(board: number[][], piece: PieceDef): boolean {
+  const size = board.length;
+  const { rows, cols } = pieceBounds(piece.cells);
+  if (rows > size || cols > size) return false;
+  for (let r = 0; r <= size - rows; r++) {
+    for (let c = 0; c <= size - cols; c++) {
+      let ok = true;
+      for (const cell of piece.cells) {
+        const row = board[r + cell.r];
+        const bc = c + cell.c;
+        if (!row || bc >= row.length || row[bc] !== 0) {
+          ok = false;
+          break;
+        }
+      }
+      if (ok) return true;
+    }
+  }
+  return false;
+}
+
+function pieceCanFit(piece: PieceDef, opts: DealOptions): boolean {
+  if (opts.fits) return opts.fits(piece);
+  if (opts.board) return pieceFitsOnBoard(opts.board, piece);
+  return true;
+}
+
+/** Draw one shape, re-rolling a third copy with the same rng. */
+function pickAllowed(rng: () => number, opts: DealOptions | undefined, tray: PieceDef[]): PieceDef {
+  let piece = pickRandomPiece(rng, opts);
+  let spins = 0;
+  while (copiesOf(tray, piece.id) >= MAX_SAME_SHAPE && spins < SHAPE_REROLLS) {
+    piece = pickRandomPiece(rng, opts);
+    spins += 1;
+  }
+  if (copiesOf(tray, piece.id) >= MAX_SAME_SHAPE) {
+    const alt = PIECE_CATALOG.find((p) => copiesOf(tray, p.id) < MAX_SAME_SHAPE);
+    if (alt) return alt;
+  }
+  return piece;
+}
+
+function dealRaw(count: number, rng: () => number, opts?: DealOptions): PieceDef[] {
+  const tray: PieceDef[] = [];
+  for (let i = 0; i < count; i++) tray.push(pickAllowed(rng, opts, tray));
+  return tray;
+}
+
+function withSmallestFallback(tray: PieceDef[]): PieceDef[] {
+  const small = smallestPiece();
+  const next = tray.slice();
+  if (next.length === 0 || copiesOf(next, small.id) >= MAX_SAME_SHAPE) return next;
+  for (let i = next.length - 1; i >= 0; i--) {
+    if (next[i]!.id !== small.id) {
+      next[i] = small;
+      return next;
+    }
+  }
+  return next;
+}
+
 export function dealTray(
   count = 3,
   rng: () => number = Math.random,
   opts?: DealOptions,
 ): PieceDef[] {
-  return Array.from({ length: count }, () => pickRandomPiece(rng, opts));
+  if (!kindnessActive(opts)) return dealRaw(count, rng, opts);
+
+  let tray = dealRaw(count, rng, opts);
+  let tries = 0;
+  while (!tray.some((piece) => pieceCanFit(piece, opts)) && tries < KINDNESS_REROLLS) {
+    tray = dealRaw(count, rng, opts);
+    tries += 1;
+  }
+  if (!tray.some((piece) => pieceCanFit(piece, opts))) {
+    tray = withSmallestFallback(tray);
+  }
+  return tray;
 }
 
 /** Assign a stable color index (1–PIECE_COLORS) from piece id. */

@@ -1,8 +1,10 @@
-import { GOALS } from '../game/goals';
+import { formatGoalProgress, GOALS, type GoalDef } from '../game/goals';
 import {
   dailyPlayStreak,
   getDailyBest,
   getWeeklyBest,
+  longestDailyStreak,
+  type DealDepth,
   type GameMode,
   type Profile,
 } from '../game/stats';
@@ -13,7 +15,10 @@ import {
   seasonRangeLabel,
   themeUnlockHint,
 } from '../game/themes';
+import { dailyRuleBlurb, formatDailyGoalProgress, getDailyRule } from '../game/dailyRules';
+import { describeObjective, PUZZLE_PACKS, PUZZLES } from '../game/puzzles';
 import { EXPERT_BLURB, EXPERT_FEATURE_LINES, getWeeklyMandate, weekKey } from '../game/expert';
+import { readDailyGoalCounters } from '../game/game';
 import { todayKey } from '../game/rng';
 import { APP_VERSION } from '../app/version';
 import type { BoardRow, BoardTab } from '../app/leaderboard';
@@ -36,6 +41,8 @@ export type ScreenHandlers = {
   onDaily: () => void;
   onWeekly: () => void;
   onBlitz: () => void;
+  onPuzzles: () => void;
+  onPuzzle: (id: string) => void;
   onContinue: () => void;
   onRecords: () => void;
   onGoals: () => void;
@@ -51,6 +58,8 @@ export type ScreenHandlers = {
   onToggleMute: () => void;
   onToggleHaptics: () => void;
   onToggleExpert: () => void;
+  onToggleHoldOption: () => void;
+  onCycleDealDepth: () => void;
   onToggleLeaderboard: () => void;
   onSaveLeaderboardName: (name: string) => void;
   onCheckUpdate: () => void;
@@ -61,21 +70,61 @@ function backButton(): string {
   return `<button type="button" class="text-btn back-btn" id="btn-back">← Back to menu</button>`;
 }
 
+function depthLabel(depth: DealDepth): string {
+  if (depth === 'gentle') return 'Gentle';
+  if (depth === 'deep') return 'Deep';
+  return 'Normal';
+}
+
 function modeLabel(mode: GameMode): string {
   if (mode === 'daily') return 'Today’s Puzzle';
   if (mode === 'weekly') return 'Weekly';
   if (mode === 'blitz') return 'Endgame Sprint';
+  if (mode === 'puzzle') return 'Puzzles';
   return 'Play';
 }
 
 const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 
-export function homeDayLine(profile: Profile, date = new Date()): string {
+function htmlText(text: string): string {
+  return text
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function dailyHome(profile: Profile, date = new Date()): { day: string; meta: string } {
   const weekday = WEEKDAYS[date.getDay()] ?? 'Today';
-  const done = profile.stats.dailyDates.includes(todayKey(date));
-  return done
-    ? `${weekday} · Today’s Puzzle done ✓`
-    : `${weekday} · Today’s Puzzle is ready`;
+  const key = todayKey(date);
+  const expert = profile.expertMode;
+  const rule = getDailyRule(key);
+  const blurb = dailyRuleBlurb(rule, expert);
+  const finished = profile.stats.dailyDates.includes(key);
+  const recorded = profile.stats.dailyGoalsMet?.includes(key) ?? false;
+  if (finished && recorded) {
+    return {
+      day: `${weekday} · ${rule.name} · ${blurb} · goal met ✓`,
+      meta: `${rule.name} · ${blurb} · Goal met`,
+    };
+  }
+  if (finished) {
+    return {
+      day: `${weekday} · ${rule.name} · ${blurb} · Today’s Puzzle done ✓`,
+      meta: `${rule.name} · ${blurb} · Goal not met`,
+    };
+  }
+  const progress = readDailyGoalCounters(expert, key);
+  const pace = formatDailyGoalProgress(rule, progress);
+  const live = progress.met ? `${pace} ✓` : pace;
+  return {
+    day: `${weekday} · ${rule.name} · ${blurb} · ${live}`,
+    meta: `${rule.name} · ${blurb} · ${live}`,
+  };
+}
+
+export function homeDayLine(profile: Profile, date = new Date()): string {
+  return dailyHome(profile, date).day;
 }
 
 export function homeSeasonLine(profile: Profile, date = new Date()): string {
@@ -95,6 +144,11 @@ export function renderHome(
   const week = weekKey();
   const mandate = getWeeklyMandate(week);
   const classicBest = expert ? profile.bestClassicExpert : profile.bestClassic;
+  const playLine = expert
+    ? 'Expert · Hold + rising pressure'
+    : profile.holdOption
+      ? 'Relaxing game · Hold'
+      : 'Relaxing game';
   const continueBtn = continueInfo
     ? `<button type="button" class="menu-btn continue" id="btn-continue">
           <span class="menu-title">Continue</span>
@@ -102,7 +156,8 @@ export function renderHome(
         </button>`
     : '';
 
-  const dayLine = homeDayLine(profile);
+  const daily = dailyHome(profile);
+  const dayLine = daily.day;
   const seasonLine = homeSeasonLine(profile);
   const expertBadge = expert
     ? `<p class="home-expert-badge">Expert Mode on</p>`
@@ -137,7 +192,7 @@ export function renderHome(
           <h1 class="home-title">ClearNine</h1>
           <div class="home-title-rule" aria-hidden="true"></div>
           <p class="home-sub">Simple. Calm. No ads.</p>
-          <p class="home-dayline">${dayLine}</p>
+          <p class="home-dayline" title="${htmlText(dayLine)}">${htmlText(dayLine)}</p>
           ${seasonLine ? `<p class="home-season">${seasonLine}</p>` : ''}
           ${expertBadge}
         </div>
@@ -146,12 +201,12 @@ export function renderHome(
 
         <button type="button" class="menu-btn primary" id="btn-classic">
           <span class="menu-title">${continueInfo?.mode === 'classic' ? 'New Play game' : 'Play'}</span>
-          <span class="menu-meta">${expert ? 'Expert · Hold + rising pressure' : 'Relaxing game'} · Best: ${classicBest}</span>
+          <span class="menu-meta">${playLine} · Best: ${classicBest}</span>
         </button>
 
-        <button type="button" class="menu-btn" id="btn-daily">
+        <button type="button" class="menu-btn" id="btn-daily" title="${htmlText(daily.meta)} · Best: ${dailyBest}">
           <span class="menu-title">${continueInfo?.mode === 'daily' ? 'New Today’s Puzzle' : expert ? 'Expert Daily' : 'Today’s Puzzle'}</span>
-          <span class="menu-meta">${expert ? 'Harder seeded daily' : 'Seeded daily with starter blocks'} · Best: ${dailyBest}</span>
+          <span class="menu-meta">${htmlText(daily.meta)} · Best: ${dailyBest}</span>
         </button>
 
         ${expertModes}
@@ -165,9 +220,15 @@ export function renderHome(
           </button>
         </div>
 
-        <button type="button" class="menu-btn secondary" id="btn-goals">
-          <span class="menu-title">Awards</span>
-        </button>
+        <div class="menu-row">
+          <button type="button" class="menu-btn secondary" id="btn-puzzles">
+            <span class="menu-title">Puzzles</span>
+            <span class="menu-meta">${Object.keys(profile.puzzlesSolved ?? {}).length} of ${PUZZLES.length}</span>
+          </button>
+          <button type="button" class="menu-btn secondary" id="btn-goals">
+            <span class="menu-title">Awards</span>
+          </button>
+        </div>
 
         <button type="button" class="menu-btn secondary" id="btn-settings">
           <span class="menu-title">Settings</span>
@@ -187,8 +248,65 @@ export function renderHome(
   root.querySelector('#btn-records')!.addEventListener('click', h.onRecords);
   root.querySelector('#btn-board')!.addEventListener('click', h.onBoard);
   root.querySelector('#btn-goals')!.addEventListener('click', h.onGoals);
+  root.querySelector('#btn-puzzles')!.addEventListener('click', h.onPuzzles);
   root.querySelector('#btn-settings')!.addEventListener('click', h.onSettings);
   root.querySelector('#btn-howto')!.addEventListener('click', h.onHowTo);
+}
+
+export function renderPuzzles(
+  root: HTMLElement,
+  profile: Profile,
+  h: ScreenHandlers,
+  resumeId: string | null,
+): void {
+  const packs = PUZZLE_PACKS.map((pack) => {
+    const cards = pack.puzzles
+      .map((puzzle) => {
+        const solved = profile.puzzlesSolved?.[puzzle.id];
+        const bits = [
+          describeObjective(puzzle.objective),
+          puzzle.parMoves != null ? `Par ${puzzle.parMoves}` : '',
+          solved ? `✓ ${solved.moves}` : resumeId === puzzle.id ? 'In progress' : '',
+        ].filter(Boolean);
+        return `<button type="button" class="menu-btn puzzle-card${solved ? ' solved' : ''}" data-puzzle="${htmlText(puzzle.id)}">
+          <span class="menu-title">${htmlText(puzzle.name)}</span>
+          <span class="menu-meta">${htmlText(bits.join(' · '))}</span>
+        </button>`;
+      })
+      .join('');
+    return `<section class="puzzle-pack">
+      <h3 class="puzzle-pack-title">${htmlText(pack.name)}</h3>
+      <p class="puzzle-pack-blurb">${htmlText(pack.blurb)}</p>
+      <div class="puzzle-grid">${cards}</div>
+    </section>`;
+  }).join('');
+
+  root.innerHTML = `
+    <div class="screen panel-screen">
+      <header class="panel-head">
+        ${backButton()}
+      </header>
+      <h2 class="panel-title">Puzzles</h2>
+      <p class="panel-lead">Fixed boards. No timer.</p>
+      <div class="panel-body">${packs}</div>
+    </div>
+  `;
+  root.querySelector('#btn-back')!.addEventListener('click', h.onBackHome);
+  root.querySelectorAll<HTMLButtonElement>('[data-puzzle]').forEach((button) => {
+    button.addEventListener('click', () => {
+      const id = button.dataset.puzzle;
+      if (id) h.onPuzzle(id);
+    });
+  });
+}
+
+export type BackView = 'home' | 'play' | 'panel' | 'puzzles';
+
+/** Where Android Back / Escape goes. Puzzle play returns to the list first. */
+export function backDestination(view: BackView, puzzlePlay: boolean): 'puzzles' | 'home' | 'exit' {
+  if (view === 'play' && puzzlePlay) return 'puzzles';
+  if (view === 'play' || view === 'panel' || view === 'puzzles') return 'home';
+  return 'exit';
 }
 
 export function renderHowTo(root: HTMLElement, h: ScreenHandlers, expert = false): void {
@@ -267,6 +385,7 @@ export function renderHowTo(root: HTMLElement, h: ScreenHandlers, expert = false
             <h3 class="howto-h">Expert Daily</h3>
             <ul class="howto-bullets">
               <li>Same idea as Today’s Puzzle, but <strong>harder</strong>: denser starter blocks and tougher piece deals.</li>
+              <li>The day’s bonus goal is shared. Expert still uses the denser board and tougher pieces.</li>
               <li>Seeded by the date — everyone on Expert gets the same hard puzzle that day.</li>
               <li>Has its own <strong>Expert Daily best</strong> (separate from the normal Daily).</li>
             </ul>
@@ -348,6 +467,10 @@ export function renderHowTo(root: HTMLElement, h: ScreenHandlers, expert = false
             <strong>Undo</strong>
             <span>Tap <em>Undo</em> if you make a mistake (limited times per game).</span>
           </li>
+          <li>
+            <strong>Today’s Puzzle</strong>
+            <span>Each day has one shared rule and a bonus goal. Meeting the goal does not end the run.</span>
+          </li>
         </ol>
         <p class="howto-p howto-expert-hint">Want more challenge? Turn on <strong>Expert Mode</strong> in Settings for Hold, harder Daily, Weekly, and Endgame.</p>
         <button type="button" class="primary-btn" id="btn-start-play">Start playing</button>
@@ -362,6 +485,7 @@ export function renderRecords(root: HTMLElement, profile: Profile, h: ScreenHand
   const today = todayKey();
   const week = weekKey();
   const streak = dailyPlayStreak(profile);
+  const longest = longestDailyStreak(profile);
   const s = profile.stats;
   const expert = profile.expertMode;
   const recent = profile.recentGames
@@ -382,9 +506,7 @@ export function renderRecords(root: HTMLElement, profile: Profile, h: ScreenHand
           <div class="stat-card"><span class="stat-label">Expert Play best</span><span class="stat-num">${profile.bestClassicExpert}</span></div>
           <div class="stat-card"><span class="stat-label">Expert Daily best</span><span class="stat-num">${getDailyBest(profile, today, true)}</span></div>
           <div class="stat-card"><span class="stat-label">Weekly best</span><span class="stat-num">${getWeeklyBest(profile, week)}</span></div>
-          <div class="stat-card"><span class="stat-label">Endgame best</span><span class="stat-num">${profile.bestBlitz}</span></div>
-          <div class="stat-card"><span class="stat-label">Best combo</span><span class="stat-num">×${s.maxCombo}</span></div>
-          <div class="stat-card"><span class="stat-label">Best streak</span><span class="stat-num">${s.maxStreak}</span></div>`
+          <div class="stat-card"><span class="stat-label">Endgame best</span><span class="stat-num">${profile.bestBlitz}</span></div>`
     : '';
 
   root.innerHTML = `
@@ -401,6 +523,21 @@ export function renderRecords(root: HTMLElement, profile: Profile, h: ScreenHand
           <div class="stat-card"><span class="stat-label">Games finished</span><span class="stat-num">${s.gamesPlayed}</span></div>
           ${expertStats}
         </div>
+        <h3 class="section-title">Lifetime</h3>
+        <div class="stat-grid lifetime-grid">
+          <div class="stat-card"><span class="stat-label">Games played</span><span class="stat-num">${s.gamesPlayed}</span></div>
+          <div class="stat-card"><span class="stat-label">Pieces placed</span><span class="stat-num">${s.piecesPlaced}</span></div>
+          <div class="stat-card"><span class="stat-label">Lines cleared</span><span class="stat-num">${s.linesCleared}</span></div>
+          <div class="stat-card"><span class="stat-label">Cells cleared</span><span class="stat-num">${s.cellsCleared}</span></div>
+          <div class="stat-card"><span class="stat-label">Best combo</span><span class="stat-num">×${s.maxCombo}</span></div>
+          <div class="stat-card"><span class="stat-label">Best streak</span><span class="stat-num">${s.maxStreak}</span></div>
+          <div class="stat-card">
+            <span class="stat-label">Daily streak</span>
+            <span class="stat-num">${streak}</span>
+            <span class="stat-note">Longest ${longest}</span>
+          </div>
+          <div class="stat-card"><span class="stat-label">Daily finishes</span><span class="stat-num">${s.dailyDates.length}</span></div>
+        </div>
         <h3 class="section-title">Recent games</h3>
         <ul class="recent-list">${recent || '<li class="empty-note">No games yet — tap Play on the menu!</li>'}</ul>
       </div>
@@ -409,16 +546,33 @@ export function renderRecords(root: HTMLElement, profile: Profile, h: ScreenHand
   root.querySelector('#btn-back')!.addEventListener('click', h.onBackHome);
 }
 
+function goalMeter(
+  goal: GoalDef,
+  profile: Profile,
+): { text: string; value: number; target: number; pct: number } | null {
+  const progress = goal.progress?.(profile);
+  if (!progress || progress.target <= 0) return null;
+  const value = Math.min(Math.max(0, progress.value), progress.target);
+  const pct = Math.round((value / progress.target) * 100);
+  return { text: formatGoalProgress(progress), value, target: progress.target, pct };
+}
+
 export function renderGoals(root: HTMLElement, profile: Profile, h: ScreenHandlers): void {
   const items = GOALS.map((g) => {
     const done = profile.unlockedGoals.includes(g.id);
+    const progress = done ? null : goalMeter(g, profile);
+    const status = done ? 'Completed' : (progress?.text ?? 'Not yet');
+    const meter = progress
+      ? `<div class="goal-meter" role="progressbar" aria-valuemin="0" aria-valuemax="${progress.target}" aria-valuenow="${progress.value}" aria-label="${g.title}"><span style="width:${progress.pct}%"></span></div>`
+      : '';
     return `
       <li class="goal-item ${done ? 'done' : ''}">
         <span class="goal-check" aria-hidden="true">${done ? '✓' : ''}</span>
         <div>
           <div class="goal-title">${g.title}</div>
           <div class="goal-desc">${g.description}</div>
-          <div class="goal-status">${done ? 'Completed' : 'Not yet'}</div>
+          <div class="goal-status${progress ? ' counting' : ''}">${status}</div>
+          ${meter}
         </div>
       </li>`;
   }).join('');
@@ -456,7 +610,7 @@ export function renderThemes(root: HTMLElement, profile: Profile, h: ScreenHandl
         data-theme="${t.id}" ${unlocked ? '' : 'disabled'}>
         <span class="theme-swatch" style="background:linear-gradient(135deg,${t.vars['--bg-top']},${t.vars['--accent']})"></span>
         <span class="theme-name">${t.name}</span>
-        <span class="theme-hint">${unlocked ? (active ? 'Using now' : 'Tap to use this color') : themeUnlockHint(t.id)}</span>
+        <span class="theme-hint">${unlocked ? (active ? 'Using now' : 'Tap to use this color') : themeUnlockHint(t.id, profile)}</span>
       </button>`;
   }).join('');
 
@@ -513,6 +667,18 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
           <span class="menu-title">Expert Mode</span>
           <span class="menu-meta" id="expert-state">${profile.expertMode ? 'On' : 'Off'}</span>
         </button>
+        ${
+          profile.expertMode
+            ? `<p class="expert-note">Included with Expert</p>`
+            : `<button type="button" class="menu-btn settings-row" id="btn-toggle-hold">
+          <span class="menu-title">Hold slot</span>
+          <span class="menu-meta" id="hold-state">${profile.holdOption ? 'On' : 'Off'}</span>
+        </button>
+        <button type="button" class="menu-btn settings-row" id="btn-cycle-depth">
+          <span class="menu-title">Piece difficulty</span>
+          <span class="menu-meta" id="depth-state">${depthLabel(profile.dealDepth)}</span>
+        </button>`
+        }
         <p class="expert-blurb">Harder puzzles, a Hold slot, and extra modes. Off returns the calm game.</p>
         <details class="expert-details">
           <summary>What Expert Mode adds</summary>
@@ -565,6 +731,12 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
   });
   root.querySelector('#btn-toggle-expert')!.addEventListener('click', () => {
     h.onToggleExpert();
+  });
+  root.querySelector('#btn-toggle-hold')?.addEventListener('click', () => {
+    h.onToggleHoldOption();
+  });
+  root.querySelector('#btn-cycle-depth')?.addEventListener('click', () => {
+    h.onCycleDealDepth();
   });
   root.querySelector('#btn-open-themes')!.addEventListener('click', h.onThemes);
   root.querySelector('#btn-toggle-seasonal')!.addEventListener('click', () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { handleOverlayBack } from './screens';
+import { handleOverlayBack, backDestination } from './screens';
 
 describe('handleOverlayBack', () => {
   it('clicks the data-back control on the topmost overlay', () => {
@@ -18,5 +18,13 @@ describe('handleOverlayBack', () => {
 
   it('returns false when no overlay is showing', () => {
     expect(handleOverlayBack()).toBe(false);
+  });
+
+  it('walks puzzle play back to the list, then home', () => {
+    expect(backDestination('play', true)).toBe('puzzles');
+    expect(backDestination('puzzles', false)).toBe('home');
+    expect(backDestination('play', false)).toBe('home');
+    expect(backDestination('panel', false)).toBe('home');
+    expect(backDestination('home', false)).toBe('exit');
   });
 });

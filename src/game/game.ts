@@ -5,11 +5,20 @@ import {
   cloneBoard,
   createEmptyBoard,
   findClears,
+  pieceFitsAnywhere,
   placePiece,
   seedDailyStarters,
   type Board,
   type ClearResult,
 } from './board';
+import {
+  dailyGoalIsMet,
+  formatDailyHud,
+  formatDailyOver,
+  getDailyRule,
+  type DailyGoalCounters,
+  type DailyRule,
+} from './dailyRules';
 import { getWeeklyMandate, weekKey, type WeeklyMandate } from './expert';
 import {
   colorForPiece,
@@ -17,6 +26,13 @@ import {
   type DealOptions,
   type PieceDef,
 } from './pieces';
+import {
+  boardFromRows,
+  getPuzzle,
+  objectiveMet,
+  pieceById,
+  PUZZLE_UNDOS,
+} from './puzzles';
 import {
   cloneRng,
   createRng,
@@ -27,7 +43,9 @@ import {
 import { scorePlacement, type ScoreBreakdown } from './scoring';
 import {
   discardPendingFinalize,
+  normalizeDealDepth,
   stagePendingFinalize,
+  type DealDepth,
   type GameMode,
 } from './stats';
 import { writeLocal } from '../app/storage';
@@ -42,6 +60,8 @@ export type PlaceResult =
       color: number;
       gameOver: boolean;
       dealt: boolean;
+      /** Daily goal flipped from open to met on this placement. */
+      goalJustMet: boolean;
     }
   | {
       ok: false;
@@ -63,7 +83,19 @@ export type UndoFrame = {
     cellsCleared: number;
     combo: number;
     streak: number;
+    allClear?: boolean;
   };
+  /** Daily goal counters before this move, so undo can roll them back. */
+  dailyLines?: number;
+  dailyRegions?: number;
+  dailyCombos?: number;
+  dailyGoalMet?: boolean;
+  /** Puzzle pack counters before this move. Absent on other modes. */
+  puzzleTrayIndex?: number;
+  puzzleMoves?: number;
+  puzzleLines?: number;
+  puzzleRegions?: number;
+  puzzleWon?: boolean;
 };
 
 export type GameSave = {
@@ -78,18 +110,41 @@ export type GameSave = {
   undoStack: UndoFrame[];
   rng: RngState;
   dailyDate?: string;
+  /** Daily goal progress. Missing on saves from before the rule of the day. */
+  dailyLines?: number;
+  dailyRegions?: number;
+  dailyCombos?: number;
+  dailyGoalMet?: boolean;
   weekKey?: string;
   clearsThisGame: number;
   expert: boolean;
+  /**
+   * Calm options for this run. Continue restores them so a Hold game stays
+   * Hold even if Settings changed. Missing on older saves (Hold off, normal deals).
+   */
+  holdOption?: boolean;
+  dealDepth?: DealDepth;
+  /**
+   * Puzzle pack resume. One slot for the whole mode; opening another puzzle
+   * replaces it. Cleared when the puzzle is won or failed. Not a Continue game.
+   */
+  puzzleId?: string;
+  puzzleTrayIndex?: number;
+  puzzleMoves?: number;
+  puzzleLines?: number;
+  puzzleRegions?: number;
 };
 
 const SAVE_CLASSIC = 'clearnine-save-classic';
 const SAVE_DAILY = 'clearnine-save-daily';
 const SAVE_WEEKLY = 'clearnine-save-weekly';
 const SAVE_BLITZ = 'clearnine-save-blitz';
+/** In-progress puzzle. Not in Continue lanes and not in the backup allow-list. */
+const SAVE_PUZZLE = 'clearnine-save-puzzle';
 const LEGACY_SAVE = 'clearnine-save';
 
 function maxUndos(mode: GameMode, mandate?: WeeklyMandate | null): number {
+  if (mode === 'puzzle') return PUZZLE_UNDOS;
   if (mode === 'classic') return 3;
   if (mode === 'blitz') return 1;
   if (mode === 'weekly' && mandate) return mandate.undos;
@@ -97,6 +152,7 @@ function maxUndos(mode: GameMode, mandate?: WeeklyMandate | null): number {
 }
 
 function saveKey(mode: GameMode, expert = false): string {
+  if (mode === 'puzzle') return SAVE_PUZZLE;
   let base = SAVE_CLASSIC;
   if (mode === 'daily') base = SAVE_DAILY;
   else if (mode === 'weekly') base = SAVE_WEEKLY;
@@ -138,16 +194,55 @@ export class Game {
   undosLeft = 3;
   clearsThisGame = 0;
   expert = false;
+  /** Calm Play Hold. Expert ignores this. Restored from the save on Continue. */
+  holdOption = false;
+  /** Calm deal bias. Expert ignores this. Restored from the save on Continue. */
+  dealDepth: DealDepth = 'normal';
+  /** Active puzzle pack id. Null outside puzzle mode. */
+  puzzleId: string | null = null;
+  puzzleMoves = 0;
+  puzzleLines = 0;
+  puzzleRegions = 0;
+  puzzleWon = false;
+  private puzzleTrayIndex = 0;
+  /** Lines (rows + columns) cleared this Daily run. */
+  private dailyLines = 0;
+  /** 3×3 regions sealed this Daily run. */
+  private dailyRegions = 0;
+  /** Placements this Daily run whose combo was ×2 or higher. */
+  private dailyCombos = 0;
+  /** True once this Daily run has met the bonus goal. */
+  private dailyGoalMet = false;
   private undoStack: UndoFrame[] = [];
   private rng = createRng(Date.now() >>> 0);
   private dailyDate = todayKey();
   private weekId = weekKey();
 
-  configure(mode: GameMode, opts?: { dailyDate?: string; week?: string; expert?: boolean }): void {
+  configure(
+    mode: GameMode,
+    opts?: {
+      dailyDate?: string;
+      week?: string;
+      expert?: boolean;
+      holdOption?: boolean;
+      dealDepth?: DealDepth;
+    },
+  ): void {
     this.mode = mode;
     this.dailyDate = opts?.dailyDate ?? todayKey();
     this.weekId = opts?.week ?? weekKey();
     this.expert = opts?.expert ?? false;
+    this.holdOption = opts?.holdOption ?? false;
+    this.dealDepth = normalizeDealDepth(opts?.dealDepth);
+    if (mode !== 'puzzle') this.puzzleId = null;
+    // A finished puzzle must not lock the next resumed or new game.
+    this.puzzleWon = false;
+  }
+
+  /** Fixed board and tray order. Expert, Hold, and ranked bests stay off. */
+  configurePuzzle(id: string): void {
+    this.configure('puzzle', { expert: false, holdOption: false, dealDepth: 'normal' });
+    this.puzzleId = id;
   }
 
   get periodKey(): string {
@@ -160,34 +255,119 @@ export class Game {
     return getWeeklyMandate(this.weekId);
   }
 
+  dailyRule(): DailyRule | null {
+    if (this.mode !== 'daily') return null;
+    return getDailyRule(this.dailyDate);
+  }
+
+  dailyProgress(): DailyGoalCounters | null {
+    if (this.mode !== 'daily') return null;
+    return {
+      lines: this.dailyLines,
+      regions: this.dailyRegions,
+      combos: this.dailyCombos,
+      score: this.score,
+      met: this.dailyGoalMet,
+    };
+  }
+
+  dailyHudText(): string {
+    const rule = this.dailyRule();
+    const progress = this.dailyProgress();
+    if (!rule || !progress) return '';
+    return formatDailyHud(rule, progress, this.expert);
+  }
+
+  boardIsClear(): boolean {
+    return !boardHasBlocks(this.board);
+  }
+
+  dailyOverText(): string {
+    const rule = this.dailyRule();
+    const progress = this.dailyProgress();
+    if (!rule || !progress) return '';
+    return formatDailyOver(rule, progress);
+  }
+
   holdEnabled(): boolean {
-    if (!this.expert) return false;
-    if (this.mode === 'classic') return true;
-    if (this.mode === 'weekly') {
-      return this.weeklyMandate()?.hold ?? true;
+    // Expert rules are unchanged: Play, and Weekly unless the Mandate turns Hold off.
+    if (this.expert) {
+      if (this.mode === 'classic') return true;
+      if (this.mode === 'weekly') {
+        return this.weeklyMandate()?.hold ?? true;
+      }
+      return false;
     }
-    return false;
+    // Calm Hold is optional and Play-only. Daily stays the same for everyone.
+    return this.mode === 'classic' && this.holdOption;
+  }
+
+  /**
+   * Practice runs do not update ranked bests and do not post to the leaderboard.
+   * That is calm Play with Hold, or any calm mode on Gentle/Deep deals.
+   * Expert always counts. Daily with Hold merely enabled still counts: Hold is not offered there.
+   */
+  practiceRun(): boolean {
+    // Puzzle packs never post bests or leaderboard scores.
+    if (this.mode === 'puzzle') return true;
+    if (this.expert) return false;
+    // A Daily rule that sets its own deal replaces Gentle/Deep, so that run is ranked.
+    const dailyOverridesDepth =
+      this.mode === 'daily' && getDailyRule(this.dailyDate).modifier?.deal != null;
+    if (this.dealDepth !== 'normal' && !dailyOverridesDepth) return true;
+    return this.holdEnabled();
   }
 
   private dealOpts(): DealOptions | undefined {
-    if (!this.expert) return undefined;
-    if (this.mode === 'classic') return { hard: true, score: this.score };
-    if (this.mode === 'weekly') {
-      const m = this.weeklyMandate();
-      if (!m) return { hard: true };
-      if (m.dealBias === 'giants') return { bias: 'giants', hard: true };
-      if (m.dealBias === 'small') return { bias: 'small' };
-      if (m.dealBias === 'rising') return { hard: true, score: this.score };
-      return { hard: true };
+    if (this.expert) {
+      if (this.mode === 'classic') return { hard: true, score: this.score };
+      if (this.mode === 'weekly') {
+        const m = this.weeklyMandate();
+        if (!m) return { hard: true };
+        if (m.dealBias === 'giants') return { bias: 'giants', hard: true };
+        if (m.dealBias === 'small') return { bias: 'small' };
+        if (m.dealBias === 'rising') return { hard: true, score: this.score };
+        return { hard: true };
+      }
+      if (this.mode === 'daily' || this.mode === 'blitz') {
+        return { hard: true };
+      }
+      return undefined;
     }
-    if (this.mode === 'daily' || this.mode === 'blitz') {
-      return { hard: true };
+    // Calm Daily rule bias. Expert Daily keeps the hard deal above.
+    if (this.mode === 'daily') {
+      const deal = getDailyRule(this.dailyDate).modifier?.deal;
+      if (deal === 'small') return { bias: 'small' };
+      if (deal === 'giants') return { bias: 'giants' };
+      if (deal === 'hard') return { hard: true };
     }
+    // Calm piece difficulty. Expert (above) ignores holdOption and dealDepth.
+    // gentle reuses the small-piece bias; deep reuses the moderate `hard` weights
+    // (larger pieces, without Expert's rising score pressure).
+    if (this.dealDepth === 'gentle') return { bias: 'small' };
+    if (this.dealDepth === 'deep') return { hard: true };
     return undefined;
   }
 
   private deal(): TraySlot[] {
-    return dealTray(3, () => this.rng.next(), this.dealOpts());
+    if (this.mode === 'puzzle') return this.dealPuzzleTray();
+    const opts = this.dealOpts();
+    const next = () => this.rng.next();
+    // Calm, non-hard deals keep one piece that fits. Expert and hard deals do not.
+    if (this.expert || opts?.hard) return dealTray(3, next, opts);
+    return dealTray(3, next, {
+      ...opts,
+      fits: (piece) => pieceFitsAnywhere(this.board, piece),
+    });
+  }
+
+  /** Next fixed tray. An exhausted sequence deals nothing, which ends the puzzle. */
+  private dealPuzzleTray(): TraySlot[] {
+    const puzzle = getPuzzle(this.puzzleId ?? '');
+    const ids = puzzle?.trays[this.puzzleTrayIndex];
+    this.puzzleTrayIndex += 1;
+    if (!ids) return [null, null, null];
+    return ids.map((id) => clonePiece(pieceById(id) ?? null));
   }
 
   newGame(): void {
@@ -200,11 +380,35 @@ export class Game {
     this.undoStack = [];
     this.clearsThisGame = 0;
     this.hold = null;
+    this.dailyLines = 0;
+    this.dailyRegions = 0;
+    this.dailyCombos = 0;
+    this.dailyGoalMet = false;
+    this.puzzleMoves = 0;
+    this.puzzleLines = 0;
+    this.puzzleRegions = 0;
+    this.puzzleWon = false;
+    this.puzzleTrayIndex = 0;
+
+    if (this.mode === 'puzzle') {
+      const puzzle = getPuzzle(this.puzzleId ?? '');
+      // Trays are fixed. The rng is stored only so the save shape still loads.
+      this.rng = createRng(1);
+      this.board = puzzle ? boardFromRows(puzzle.board) : createEmptyBoard();
+      this.tray = puzzle ? this.dealPuzzleTray() : [null, null, null];
+      if (!anyTrayPieceFits(this.board, this.tray)) this.gameOver = true;
+      this.writePersist();
+      return;
+    }
 
     if (this.mode === 'daily') {
       const seed = this.expert ? `${this.dailyDate}-expert` : this.dailyDate;
       this.rng = rngFromDate(seed);
-      seedDailyStarters(this.board, () => this.rng.next(), { expert: this.expert });
+      const rule = getDailyRule(this.dailyDate);
+      // Clean Slate skips starters on calm Daily. Expert Daily stays dense.
+      if (this.expert || !rule.modifier?.emptyBoard) {
+        seedDailyStarters(this.board, () => this.rng.next(), { expert: this.expert });
+      }
     } else if (this.mode === 'weekly') {
       this.rng = rngFromDate(`weekly-${this.weekId}`);
       const dense = mandate?.dense ?? true;
@@ -224,6 +428,11 @@ export class Game {
   loadOrNew(): boolean {
     const saved = loadSave(this.mode, this.dailyDate, this.weekId, this.expert);
     if (saved && !saved.gameOver) {
+      // A different puzzle must not resume this one's board.
+      if (this.mode === 'puzzle' && saved.puzzleId !== this.puzzleId) {
+        this.newGame();
+        return false;
+      }
       this.applySave(saved);
       return true;
     }
@@ -233,6 +442,7 @@ export class Game {
 
   private applySave(saved: GameSave): void {
     this.mode = saved.mode;
+    this.puzzleWon = false;
     this.board = saved.board;
     this.tray = saved.tray;
     this.hold = saved.hold ?? null;
@@ -249,8 +459,27 @@ export class Game {
     this.rng = cloneRng(saved.rng);
     this.clearsThisGame = saved.clearsThisGame ?? 0;
     this.expert = saved.expert ?? false;
+    // Continue keeps the Hold and piece difficulty this run started with, even
+    // if those Settings were changed later. Older saves omit the fields (Hold
+    // off, normal deals). A parked piece is dropped only when this resumed run
+    // still has no Hold slot — see the check below.
+    this.holdOption = saved.holdOption === true;
+    this.dealDepth = normalizeDealDepth(saved.dealDepth);
     if (saved.dailyDate) this.dailyDate = saved.dailyDate;
     if (saved.weekKey) this.weekId = saved.weekKey;
+    this.dailyLines = countField(saved.dailyLines);
+    this.dailyRegions = countField(saved.dailyRegions);
+    this.dailyCombos = countField(saved.dailyCombos);
+    this.dailyGoalMet =
+      this.mode === 'daily' && (saved.dailyGoalMet === true || this.reachedDailyGoal());
+    if (saved.mode === 'puzzle') {
+      if (typeof saved.puzzleId === 'string') this.puzzleId = saved.puzzleId;
+      this.puzzleTrayIndex = countField(saved.puzzleTrayIndex);
+      this.puzzleMoves = countField(saved.puzzleMoves);
+      this.puzzleLines = countField(saved.puzzleLines);
+      this.puzzleRegions = countField(saved.puzzleRegions);
+      this.puzzleWon = false;
+    }
     // Corrupt / mode mismatch: Hold must not keep a dead game alive with no UI.
     if (!this.holdEnabled() && this.hold) {
       this.hold = null;
@@ -258,7 +487,7 @@ export class Game {
   }
 
   tryPlace(trayIndex: number, row: number, col: number): PlaceResult {
-    if (this.gameOver) return { ok: false, reason: 'invalid' };
+    if (this.gameOver || this.puzzleWon) return { ok: false, reason: 'invalid' };
     const piece = this.tray[trayIndex];
     if (!piece) return { ok: false, reason: 'empty-slot' };
     if (!canPlace(this.board, piece, row, col)) {
@@ -272,23 +501,27 @@ export class Game {
     this.tray[trayIndex] = null;
 
     const clears = findClears(this.board);
-    const breakdown = scorePlacement(piece, clears, this.streak);
+    if (clears.clearCount > 0) applyClears(this.board, clears);
+    const breakdown = scorePlacement(
+      piece,
+      clears,
+      this.streak,
+      clears.clearCount > 0 && !boardHasBlocks(this.board),
+    );
     this.streak = breakdown.streak;
     this.score += breakdown.total;
     this.clearsThisGame += clears.clearCount;
     this.tagLastUndoPlacement(clears.clearCount, clears.cells.length, breakdown);
-
-    if (clears.clearCount > 0) {
-      applyClears(this.board, clears);
-    }
+    const goalJustMet = this.applyDailyProgress(clears, breakdown);
+    this.tallyPuzzle(clears);
 
     let dealt = false;
-    if (this.tray.every((s) => s === null)) {
+    if (!this.puzzleWon && this.tray.every((s) => s === null)) {
       this.tray = this.deal();
       dealt = true;
     }
 
-    if (!anyTrayPieceFits(this.board, this.tray)) {
+    if (!this.puzzleWon && !anyTrayPieceFits(this.board, this.tray)) {
       if (!this.hold || !pieceFitsHold(this.board, this.hold)) {
         this.gameOver = true;
       }
@@ -303,12 +536,13 @@ export class Game {
       color,
       gameOver: this.gameOver,
       dealt,
+      goalJustMet,
     };
   }
 
   /** Place the held piece onto the board. */
   tryPlaceHold(row: number, col: number): PlaceResult {
-    if (this.gameOver || !this.hold) return { ok: false, reason: 'empty-slot' };
+    if (this.gameOver || this.puzzleWon || !this.hold) return { ok: false, reason: 'empty-slot' };
     if (!canPlace(this.board, this.hold, row, col)) {
       return { ok: false, reason: 'invalid' };
     }
@@ -320,20 +554,27 @@ export class Game {
     placePiece(this.board, piece, row, col, color);
 
     const clears = findClears(this.board);
-    const breakdown = scorePlacement(piece, clears, this.streak);
+    if (clears.clearCount > 0) applyClears(this.board, clears);
+    const breakdown = scorePlacement(
+      piece,
+      clears,
+      this.streak,
+      clears.clearCount > 0 && !boardHasBlocks(this.board),
+    );
     this.streak = breakdown.streak;
     this.score += breakdown.total;
     this.clearsThisGame += clears.clearCount;
     this.tagLastUndoPlacement(clears.clearCount, clears.cells.length, breakdown);
-    if (clears.clearCount > 0) applyClears(this.board, clears);
+    const goalJustMet = this.applyDailyProgress(clears, breakdown);
+    this.tallyPuzzle(clears);
 
     let dealt = false;
-    if (this.tray.every((s) => s === null)) {
+    if (!this.puzzleWon && this.tray.every((s) => s === null)) {
       this.tray = this.deal();
       dealt = true;
     }
 
-    if (!anyTrayPieceFits(this.board, this.tray)) {
+    if (!this.puzzleWon && !anyTrayPieceFits(this.board, this.tray)) {
       if (!this.hold || !pieceFitsHold(this.board, this.hold)) {
         this.gameOver = true;
       }
@@ -347,6 +588,7 @@ export class Game {
       color,
       gameOver: this.gameOver,
       dealt,
+      goalJustMet,
     };
   }
 
@@ -365,12 +607,12 @@ export class Game {
     this.hold = trayPiece;
 
     let dealt = false;
-    if (this.tray.every((s) => s === null)) {
+    if (!this.puzzleWon && this.tray.every((s) => s === null)) {
       this.tray = this.deal();
       dealt = true;
     }
 
-    if (!anyTrayPieceFits(this.board, this.tray)) {
+    if (!this.puzzleWon && !anyTrayPieceFits(this.board, this.tray)) {
       if (!this.hold || !pieceFitsHold(this.board, this.hold)) {
         this.gameOver = true;
       }
@@ -402,9 +644,20 @@ export class Game {
     this.rng = cloneRng(frame.rng);
     this.clearsThisGame =
       typeof frame.clearsThisGame === 'number' ? frame.clearsThisGame : this.clearsThisGame;
+    if (typeof frame.dailyLines === 'number') this.dailyLines = frame.dailyLines;
+    if (typeof frame.dailyRegions === 'number') this.dailyRegions = frame.dailyRegions;
+    if (typeof frame.dailyCombos === 'number') this.dailyCombos = frame.dailyCombos;
+    if (typeof frame.dailyGoalMet === 'boolean') this.dailyGoalMet = frame.dailyGoalMet;
+    if (typeof frame.puzzleMoves === 'number') {
+      this.puzzleTrayIndex = frame.puzzleTrayIndex ?? 0;
+      this.puzzleMoves = frame.puzzleMoves;
+      this.puzzleLines = frame.puzzleLines ?? 0;
+      this.puzzleRegions = frame.puzzleRegions ?? 0;
+      this.puzzleWon = frame.puzzleWon === true;
+    }
     this.undosLeft -= 1;
     this.gameOver = false;
-    if (!anyTrayPieceFits(this.board, this.tray)) {
+    if (!this.puzzleWon && !anyTrayPieceFits(this.board, this.tray)) {
       if (!this.hold || !pieceFitsHold(this.board, this.hold)) {
         this.gameOver = true;
       }
@@ -420,6 +673,41 @@ export class Game {
     };
   }
 
+  private reachedDailyGoal(): boolean {
+    if (this.mode !== 'daily') return false;
+    return dailyGoalIsMet(getDailyRule(this.dailyDate), {
+      lines: this.dailyLines,
+      regions: this.dailyRegions,
+      combos: this.dailyCombos,
+      score: this.score,
+    });
+  }
+
+  /** Count this placement toward the Daily bonus. Returns true the moment it is first met. */
+  private applyDailyProgress(clears: ClearResult, breakdown: ScoreBreakdown): boolean {
+    if (this.mode !== 'daily') return false;
+    const wasMet = this.dailyGoalMet;
+    this.dailyLines += clears.rows.length + clears.cols.length;
+    this.dailyRegions += clears.regions.length;
+    if (breakdown.comboMultiplier >= 2) this.dailyCombos += 1;
+    if (this.reachedDailyGoal()) this.dailyGoalMet = true;
+    return !wasMet && this.dailyGoalMet;
+  }
+
+  /** Count this placement toward the puzzle objective. Daily goals are untouched. */
+  private tallyPuzzle(clears: ClearResult): void {
+    if (this.mode !== 'puzzle') return;
+    this.puzzleMoves += 1;
+    this.puzzleLines += clears.rows.length + clears.cols.length;
+    this.puzzleRegions += clears.regions.length;
+    const puzzle = getPuzzle(this.puzzleId ?? '');
+    if (!puzzle) return;
+    if (objectiveMet(puzzle.objective, this.puzzleLines, this.puzzleRegions, !boardHasBlocks(this.board))) {
+      this.puzzleWon = true;
+      this.gameOver = false;
+    }
+  }
+
   private tagLastUndoPlacement(
     clearCount: number,
     cellsCleared: number,
@@ -432,6 +720,7 @@ export class Game {
       cellsCleared,
       combo: breakdown.comboMultiplier,
       streak: breakdown.streak,
+      allClear: breakdown.allClear,
     };
   }
 
@@ -444,6 +733,15 @@ export class Game {
       streak: this.streak,
       rng: { seed: this.rng.seed, counter: this.rng.counter },
       clearsThisGame: this.clearsThisGame,
+      dailyLines: this.dailyLines,
+      dailyRegions: this.dailyRegions,
+      dailyCombos: this.dailyCombos,
+      dailyGoalMet: this.dailyGoalMet,
+      puzzleTrayIndex: this.puzzleTrayIndex,
+      puzzleMoves: this.puzzleMoves,
+      puzzleLines: this.puzzleLines,
+      puzzleRegions: this.puzzleRegions,
+      puzzleWon: this.puzzleWon,
       kind,
     });
     const cap = this.undosLeft;
@@ -473,21 +771,28 @@ export class Game {
   }
 
   private writePersist(): void {
-    if (this.gameOver) {
+    // A won puzzle is finished, but it is not a ranked game-over. Clear the
+    // resume slot and do not stage a best-score finalize.
+    if (this.gameOver || (this.mode === 'puzzle' && this.puzzleWon)) {
       // The overlay can still undo, so the UI waits to call recordGameFinished.
       // Stage the result now; undo drops it, and the next load commits it if
       // the process dies first. The continue-save stays cleared either way.
       // Clear the continue-save first so a crash cannot leave a resumable board
       // for a run that was already staged as finished.
+      // Puzzle wins and fails are not ranked runs, so they are not staged.
       clearSave(this.mode, this.expert);
-      stagePendingFinalize({
-        mode: this.mode,
-        expert: this.expert,
-        score: this.score,
-        cleared: this.clearsThisGame,
-        date: this.dailyDate,
-        week: this.mode === 'weekly' ? this.weekId : undefined,
-      });
+      if (this.mode !== 'puzzle') {
+        stagePendingFinalize({
+          mode: this.mode,
+          expert: this.expert,
+          score: this.score,
+          cleared: this.clearsThisGame,
+          date: this.dailyDate,
+          week: this.mode === 'weekly' ? this.weekId : undefined,
+          practice: this.practiceRun(),
+          dailyGoalMet: this.mode === 'daily' && this.dailyGoalMet,
+        });
+      }
       return;
     }
     const save: GameSave = {
@@ -501,13 +806,28 @@ export class Game {
       rng: { seed: this.rng.seed, counter: this.rng.counter },
       clearsThisGame: this.clearsThisGame,
       expert: this.expert,
+      holdOption: this.holdOption,
+      dealDepth: this.dealDepth,
       // Undo frames stay in memory. Writing them made every move a large save.
       // The budget is kept; Undo re-enables once the first post-Continue move pushes a frame.
       undosLeft: this.undosLeft,
       undoStack: [],
     };
-    if (this.mode === 'daily') save.dailyDate = this.dailyDate;
+    if (this.mode === 'daily') {
+      save.dailyDate = this.dailyDate;
+      save.dailyLines = this.dailyLines;
+      save.dailyRegions = this.dailyRegions;
+      save.dailyCombos = this.dailyCombos;
+      if (this.dailyGoalMet) save.dailyGoalMet = true;
+    }
     if (this.mode === 'weekly') save.weekKey = this.weekId;
+    if (this.mode === 'puzzle') {
+      save.puzzleId = this.puzzleId ?? '';
+      save.puzzleTrayIndex = this.puzzleTrayIndex;
+      save.puzzleMoves = this.puzzleMoves;
+      save.puzzleLines = this.puzzleLines;
+      save.puzzleRegions = this.puzzleRegions;
+    }
     writeSave(this.mode, save);
   }
 }
@@ -542,6 +862,9 @@ function loadSave(
     if ((saved.expert ?? false) !== expert) return null;
     if (mode === 'daily' && saved.dailyDate !== dailyDate) return null;
     if (mode === 'weekly' && saved.weekKey !== week) return null;
+    if (mode === 'puzzle' && (typeof saved.puzzleId !== 'string' || saved.puzzleId.length === 0)) {
+      return null;
+    }
     if (!saved.rng) return null;
     return saved;
   } catch {
@@ -555,6 +878,23 @@ function clearSave(mode: GameMode, expert = false): void {
   } catch {
     /* ignore */
   }
+}
+
+function countField(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return 0;
+  return Math.min(1_000_000_000, Math.floor(value));
+}
+
+/** In-progress Daily goal counters. Zeros when that day's save is missing. */
+export function readDailyGoalCounters(expert = false, date = todayKey()): DailyGoalCounters {
+  const saved = loadSave('daily', date, weekKey(), expert);
+  const lines = countField(saved?.dailyLines);
+  const regions = countField(saved?.dailyRegions);
+  const combos = countField(saved?.dailyCombos);
+  const score = countField(saved?.score);
+  const progress = { lines, regions, combos, score };
+  const met = !!saved && (saved.dailyGoalMet === true || dailyGoalIsMet(getDailyRule(date), progress));
+  return { ...progress, met };
 }
 
 function boardHasBlocks(board: Board): boolean {
@@ -579,6 +919,7 @@ function saveIsContinuable(saved: GameSave | null): saved is GameSave {
 
 export type ContinueGame = { mode: GameMode; score: number; expert: boolean };
 
+/** Puzzle saves stay on their own key and resume from the puzzle list, not Continue. */
 function continueLanes(preferExpert: boolean): Array<{ mode: GameMode; expert: boolean }> {
   const expertFirst: Array<{ mode: GameMode; expert: boolean }> = [
     { mode: 'classic', expert: true },
@@ -613,4 +954,11 @@ export function findContinueFor(mode: GameMode, expert: boolean): ContinueGame |
     return { mode, score: saved.score, expert };
   }
   return null;
+}
+
+/** In-progress puzzle id. Home Continue does not use this save. */
+export function puzzleResumeId(): string | null {
+  const saved = loadSave('puzzle', todayKey(), weekKey(), false);
+  if (!saveIsContinuable(saved) || typeof saved.puzzleId !== 'string' || !saved.puzzleId) return null;
+  return saved.puzzleId;
 }

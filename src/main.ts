@@ -1,15 +1,23 @@
 import { BOARD_SIZE, REGION, findNearestPlacement, pieceFitsAnywhere, type ClearResult } from './game/board';
-import { findContinueFor, findContinueGame, Game } from './game/game';
+import { findContinueFor, findContinueGame, Game, puzzleResumeId } from './game/game';
 import { getWeeklyMandate, weekKey } from './game/expert';
 import { evaluateGoals } from './game/goals';
 import { cellCount, colorForPiece, pieceBounds, type PieceDef } from './game/pieces';
 import { todayKey } from './game/rng';
 import {
+  describeObjective,
+  formatObjectiveProgress,
+  getPuzzle,
+  nextPuzzleId,
+} from './game/puzzles';
+import {
   getDailyBest,
   getWeeklyBest,
   loadProfile,
+  nextDealDepth,
   recordGameFinished,
   recordPlacement,
+  recordPuzzleSolved,
   reversePlacement,
   saveProfile,
   type GameMode,
@@ -34,6 +42,7 @@ import {
   renderGoals,
   renderHome,
   renderHowTo,
+  renderPuzzles,
   renderRecords,
   renderSettings,
   renderThemes,
@@ -43,6 +52,7 @@ import {
   showTutorial,
   showUpdateDownloadProgress,
   handleOverlayBack,
+  backDestination,
   renderBoard,
   transitionScreen,
   type ScreenHandlers,
@@ -89,6 +99,7 @@ let sessionClears = 0;
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
 let hintSlot: number | null = null;
 let cheeredBestThisGame = false;
+let puzzleSolveSnapshot: { id: string; prev: { moves: number } | undefined } | null = null;
 let displayedScore = 0;
 let scoreAnim: number | null = null;
 /** True after game-over stats have been written for the current overlay. */
@@ -98,6 +109,10 @@ let playSessionId = 0;
 let clearAnimTimer: ReturnType<typeof setTimeout> | null = null;
 
 function modeTitle(mode: GameMode): string {
+  if (mode === 'puzzle') {
+    const name = getPuzzle(game.puzzleId ?? '')?.name;
+    return name ? `Puzzle · ${name}` : 'Puzzle';
+  }
   if (mode === 'daily') return game.expert ? 'Expert Daily' : 'Today’s Puzzle';
   if (mode === 'weekly') {
     const name = game.weeklyMandate()?.name ?? getWeeklyMandate(weekKey()).name;
@@ -119,6 +134,8 @@ const handlers: ScreenHandlers = {
   onDaily: () => void beginMode('daily'),
   onWeekly: () => void beginMode('weekly'),
   onBlitz: () => void beginMode('blitz'),
+  onPuzzles: () => showPuzzleList(),
+  onPuzzle: (id) => startPuzzle(id),
   onContinue: () => {
     const info = findContinueGame(profile.expertMode);
     if (!info) {
@@ -197,6 +214,24 @@ const handlers: ScreenHandlers = {
         : 'Expert Mode off — back to the calm game',
     );
   },
+  onToggleHoldOption: () => {
+    profile.holdOption = !profile.holdOption;
+    saveProfile(profile);
+    hapticTap();
+    sfx.tap();
+    showSettings();
+    showToast(profile.holdOption ? 'Hold slot on for Play' : 'Hold slot off');
+  },
+  onCycleDealDepth: () => {
+    profile.dealDepth = nextDealDepth(profile.dealDepth);
+    saveProfile(profile);
+    hapticTap();
+    sfx.tap();
+    showSettings();
+    const name =
+      profile.dealDepth === 'gentle' ? 'Gentle' : profile.dealDepth === 'deep' ? 'Deep' : 'Normal';
+    showToast(`Piece difficulty: ${name}`);
+  },
   onToggleLeaderboard: () => {
     if (!profile.leaderboardOn && !profile.leaderboardName.trim()) {
       showToast('Type a leaderboard name first');
@@ -242,11 +277,12 @@ async function beginMode(mode: GameMode): Promise<void> {
   startPlay(mode, false);
 }
 
-type AppView = 'home' | 'play' | 'panel';
+type AppView = 'home' | 'play' | 'panel' | 'puzzles';
 let appView: AppView = 'home';
 
 function showHome(): void {
-  if (appView === 'play' && !game.gameOver) {
+  if (appView === 'play' && game.mode === 'puzzle' && game.puzzleWon) commitPuzzleSolve();
+  if (appView === 'play' && !game.gameOver && !game.puzzleWon) {
     game.persist();
   }
   stopHintTimer();
@@ -259,6 +295,57 @@ function showHome(): void {
     renderHome(app, profile, handlers, findContinueGame(profile.expertMode));
     setupHomeLayout();
     maybeSeasonSting();
+  });
+}
+
+function showPuzzleList(): void {
+  if (appView === 'play' && game.puzzleWon) commitPuzzleSolve();
+  if (appView === 'play' && !game.gameOver && !game.puzzleWon) game.persist();
+  puzzleSolveSnapshot = null;
+  stopHintTimer();
+  teardownPlayLayout();
+  teardownHomeLayout();
+  profile = loadProfile();
+  appView = 'puzzles';
+  transitionScreen(app, () => {
+    renderPuzzles(app, profile, handlers, puzzleResumeId());
+  });
+}
+
+function startPuzzle(id: string): void {
+  puzzleSolveSnapshot = null;
+  teardownHomeLayout();
+  sessionClears = 0;
+  cheeredBestThisGame = false;
+  gameOverFinalized = false;
+  sfx.resetPhrase();
+  playSessionId += 1;
+  const session = playSessionId;
+  if (clearAnimTimer) {
+    clearTimeout(clearAnimTimer);
+    clearAnimTimer = null;
+  }
+  game.configurePuzzle(id);
+  appView = 'play';
+  transitionScreen(app, () => {
+    if (session !== playSessionId) return;
+    mountPlayUi('puzzle');
+    // Same puzzle id resumes the local save. A different id, a win, or a fail starts fresh.
+    game.loadOrNew();
+    sessionClears = game.clearsThisGame;
+    displayedScore = 0;
+    paintBoard();
+    paintTray(true);
+    paintHold();
+    updateHud(true);
+    hideGameOver();
+    requestAnimationFrame(() => {
+      fitBoardToWrap();
+      boardEl.classList.add('board-enter');
+      setTimeout(() => boardEl.classList.remove('board-enter'), 420);
+    });
+    if (game.puzzleWon || game.gameOver) showPuzzleEnd();
+    else resetHintTimer();
   });
 }
 
@@ -364,6 +451,8 @@ function startPlay(mode: GameMode, resume: boolean, expert = profile.expertMode)
     dailyDate: todayKey(),
     week: weekKey(),
     expert,
+    holdOption: profile.holdOption,
+    dealDepth: profile.dealDepth,
   });
   appView = 'play';
   transitionScreen(app, () => {
@@ -386,7 +475,7 @@ function startPlay(mode: GameMode, resume: boolean, expert = profile.expertMode)
       const wrap = boardEl?.parentElement;
       const wrapH = wrap?.clientHeight ?? 0;
       const starved = wrapH > 0 && wrapH < 220;
-      app.classList.toggle('play-compact', starved && profile.expertMode);
+      app.classList.toggle('play-compact', starved && (profile.expertMode || game.holdEnabled()));
       if (starved) {
         requestAnimationFrame(() => fitBoardToWrap());
       }
@@ -420,13 +509,13 @@ function mountPlayUi(mode: GameMode): void {
   app.classList.add('play-layout');
   app.innerHTML = `
     <header class="play-top">
-      <button type="button" class="text-btn menu-nav-btn" id="home-btn">Menu</button>
+      <button type="button" class="text-btn menu-nav-btn" id="home-btn">${mode === 'puzzle' ? 'Puzzles' : 'Menu'}</button>
       <div class="play-mode" id="mode-badge">${modeLabel}</div>
     </header>
 
     <div class="score-bar">
       <div class="score-block">
-        <span class="score-label">Your score</span>
+        <span class="score-label" id="score-label">${mode === 'puzzle' ? 'Objective' : 'Your score'}</span>
         <span class="score-value" id="score">0</span>
       </div>
       <div class="score-block">
@@ -434,6 +523,7 @@ function mountPlayUi(mode: GameMode): void {
         <span class="score-value" id="best">0</span>
       </div>
     </div>
+    <p class="daily-rule" id="daily-rule" hidden></p>
     <p class="beat-target" id="beat-target" hidden></p>
 
     <div class="board-wrap">
@@ -457,8 +547,8 @@ function mountPlayUi(mode: GameMode): void {
         <span class="tool-meta">Tap to change</span>
       </button>
       <button type="button" class="tool-btn" id="new-btn">
-        <span class="tool-title">New Game</span>
-        <span class="tool-meta">Start over</span>
+        <span class="tool-title">${mode === 'puzzle' ? 'Retry' : 'New Game'}</span>
+        <span class="tool-meta">${mode === 'puzzle' ? 'Same puzzle' : 'Start over'}</span>
       </button>
     </div>
 
@@ -468,7 +558,7 @@ function mountPlayUi(mode: GameMode): void {
       <div class="dialog">
         <h2 id="over-title">Great game!</h2>
         <p id="over-sub">The board is too full for your remaining pieces.</p>
-        <p class="final-label">Your score</p>
+        <p class="final-label" id="final-label">Your score</p>
         <div class="final-score" id="final-score">0</div>
         <p id="best-note"></p>
         <button type="button" class="primary-btn" id="again-btn">Play again</button>
@@ -503,7 +593,7 @@ function fitBoardToWrap(): void {
   if (!boardEl || !boardEl.isConnected) return;
   const wrap = boardEl.parentElement;
   if (!wrap) return;
-  if (app.classList.contains('play-layout') && profile.expertMode) {
+  if (app.classList.contains('play-layout') && (profile.expertMode || game.holdEnabled())) {
     const starved = wrap.clientHeight > 0 && wrap.clientHeight < 220;
     const was = app.classList.contains('play-compact');
     app.classList.toggle('play-compact', starved);
@@ -586,6 +676,7 @@ function fitHomeLayout(): void {
 let boardEl: HTMLDivElement;
 let trayEl: HTMLDivElement;
 let scoreEl: HTMLSpanElement;
+let scoreLabel: HTMLSpanElement;
 let bestEl: HTMLSpanElement;
 let bestLabel: HTMLSpanElement;
 let beatTargetEl: HTMLParagraphElement;
@@ -608,6 +699,9 @@ let streakBanner: HTMLDivElement;
 let celebrateBanner: HTMLDivElement;
 let hintEl: HTMLParagraphElement;
 let overTitle: HTMLHeadingElement;
+let overSub: HTMLParagraphElement;
+let finalLabel: HTMLParagraphElement;
+let dailyRuleEl: HTMLParagraphElement;
 let holdSlotBtn: HTMLElement | null = null;
 let holdPreview: HTMLDivElement | null = null;
 let selectedTrayForHold: number | null = null;
@@ -619,6 +713,7 @@ function bindPlayDom(): void {
   boardEl = app.querySelector('#board')!;
   trayEl = app.querySelector('#tray')!;
   scoreEl = app.querySelector('#score')!;
+  scoreLabel = app.querySelector('#score-label')!;
   bestEl = app.querySelector('#best')!;
   bestLabel = app.querySelector('#best-label')!;
   beatTargetEl = app.querySelector('#beat-target')!;
@@ -641,6 +736,9 @@ function bindPlayDom(): void {
   celebrateBanner = app.querySelector('#celebrate-banner')!;
   hintEl = app.querySelector('#hint')!;
   overTitle = app.querySelector('#over-title')!;
+  overSub = app.querySelector('#over-sub')!;
+  finalLabel = app.querySelector('#final-label')!;
+  dailyRuleEl = app.querySelector('#daily-rule')!;
   holdSlotBtn = app.querySelector('#hold-slot');
   holdPreview = app.querySelector('#hold-preview');
 
@@ -661,10 +759,12 @@ function bindPlayDom(): void {
       clearAnimTimer = null;
     }
     sessionClears = game.clearsThisGame;
-    if (result.placement) {
+    revertPuzzleSolveIfUndone();
+    if (result.placement && game.mode !== 'puzzle') {
       reversePlacement(profile, {
         clearCount: result.placement.clearCount,
         cellsCleared: result.placement.cellsCleared,
+        allClear: result.placement.allClear,
       });
       saveProfile(profile);
     }
@@ -687,6 +787,11 @@ function bindPlayDom(): void {
 
   newBtn.addEventListener('click', () => {
     void (async () => {
+      if (game.mode === 'puzzle') {
+        hideGameOver();
+        startFresh();
+        return;
+      }
       const ok = await askConfirm('Start over? This board will be cleared.');
       if (!ok) return;
       finalizeGameOverIfNeeded();
@@ -695,15 +800,37 @@ function bindPlayDom(): void {
   });
 
   homeBtn.addEventListener('click', () => {
+    if (game.mode === 'puzzle') {
+      commitPuzzleSolve();
+      showPuzzleList();
+      return;
+    }
     finalizeGameOverIfNeeded();
     showHome();
   });
   againBtn.addEventListener('click', () => {
+    if (game.mode === 'puzzle') {
+      if (game.puzzleWon) {
+        commitPuzzleSolve();
+        const next = game.puzzleId ? nextPuzzleId(game.puzzleId) : null;
+        if (next) startPuzzle(next);
+        else showPuzzleList();
+      } else {
+        hideGameOver();
+        startFresh();
+      }
+      return;
+    }
     finalizeGameOverIfNeeded();
     startFresh();
   });
   shareBtn.addEventListener('click', () => void shareRunScore());
   overHomeBtn.addEventListener('click', () => {
+    if (game.mode === 'puzzle') {
+      commitPuzzleSolve();
+      showPuzzleList();
+      return;
+    }
     finalizeGameOverIfNeeded();
     showHome();
   });
@@ -917,43 +1044,86 @@ function animateScoreTo(target: number): void {
 }
 
 function updateHud(snapScore = false): void {
-  if (snapScore) {
+  const puzzleMode = game.mode === 'puzzle';
+  if (puzzleMode) {
+    const puzzle = getPuzzle(game.puzzleId ?? '');
+    scoreLabel.textContent = 'Objective';
+    scoreEl.classList.add('score-objective');
+    scoreEl.textContent = puzzle ? describeObjective(puzzle.objective) : 'Puzzle';
+    bestLabel.textContent = 'Progress';
+    bestEl.textContent = puzzle
+      ? formatObjectiveProgress(
+          puzzle.objective,
+          game.puzzleLines,
+          game.puzzleRegions,
+          game.boardIsClear(),
+        )
+      : '';
+    displayedScore = 0;
+    beatTargetEl.hidden = true;
+  } else if (snapScore) {
+    scoreEl.classList.remove('score-objective');
+    scoreLabel.textContent = 'Your score';
     displayedScore = game.score;
     scoreEl.textContent = String(game.score);
   } else {
+    scoreEl.classList.remove('score-objective');
+    scoreLabel.textContent = 'Your score';
     animateScoreTo(game.score);
   }
-  const target = bestTarget();
-  if (game.mode === 'daily') {
-    bestLabel.textContent = game.expert ? 'Expert best' : 'Best today';
-  } else if (game.mode === 'weekly') {
-    bestLabel.textContent = 'Week best';
-  } else if (game.mode === 'blitz') {
-    bestLabel.textContent = 'Sprint best';
-  } else {
-    bestLabel.textContent = game.expert ? 'Expert best' : 'Best ever';
-  }
-  bestEl.textContent = String(Math.max(target, game.score));
+  if (!puzzleMode) {
+    const target = bestTarget();
+    if (game.mode === 'daily') {
+      bestLabel.textContent = game.expert ? 'Expert best' : 'Best today';
+    } else if (game.mode === 'weekly') {
+      bestLabel.textContent = 'Week best';
+    } else if (game.mode === 'blitz') {
+      bestLabel.textContent = 'Sprint best';
+    } else {
+      bestLabel.textContent = game.expert ? 'Expert best' : 'Best ever';
+    }
+    bestEl.textContent = String(Math.max(target, game.score));
 
-  if (game.expert && target > 0) {
-    beatTargetEl.hidden = false;
-    const remain = Math.max(0, target + 1 - game.score);
-    beatTargetEl.textContent =
-      remain === 0 ? 'You’re at your best — keep going!' : `Beat your best: ${target} · ${remain} to go`;
+    if (game.expert && target > 0) {
+      beatTargetEl.hidden = false;
+      const remain = Math.max(0, target + 1 - game.score);
+      beatTargetEl.textContent =
+        remain === 0 ? 'You’re at your best — keep going!' : `Beat your best: ${target} · ${remain} to go`;
+    } else {
+      beatTargetEl.hidden = true;
+    }
+  }
+
+  const dailyHud = game.dailyHudText();
+  if (dailyHud) {
+    dailyRuleEl.hidden = false;
+    dailyRuleEl.textContent = dailyHud;
+    dailyRuleEl.title = dailyHud;
   } else {
-    beatTargetEl.hidden = true;
+    dailyRuleEl.hidden = true;
+    dailyRuleEl.textContent = '';
+    dailyRuleEl.removeAttribute('title');
   }
 
   muteTitle.textContent = sfx.muted ? 'Sound Off' : 'Sound On';
   undoBtn.disabled = !game.canUndo();
   undoBtn.classList.toggle('disabled', !game.canUndo());
-  undoMeta.textContent = `${game.undosLeft} left`;
+  undoMeta.textContent = game.mode === 'puzzle'
+    ? (game.canUndo() ? 'Ready' : '—')
+    : `${game.undosLeft} left`;
   if (hintSlot === null) {
-    hintEl.textContent = game.holdEnabled()
-      ? 'Drag a piece — or tap one, then Hold to park it'
-      : 'Your pieces — drag one onto the board';
+    hintEl.textContent = game.mode === 'puzzle'
+      ? puzzleHint()
+      : game.holdEnabled()
+        ? 'Drag a piece — or tap one, then Hold to park it'
+        : 'Your pieces — drag one onto the board';
     hintEl.classList.remove('hint-active');
   }
+}
+
+function puzzleHint(): string {
+  const par = getPuzzle(game.puzzleId ?? '')?.parMoves;
+  return par ? `Drag a piece onto the board · Par ${par}` : 'Drag a piece onto the board';
 }
 
 function stopHintTimer(): void {
@@ -970,9 +1140,11 @@ function clearHintHighlight(): void {
   }
   holdSlotBtn?.classList.remove('hint-pulse');
   if (hintEl) {
-    hintEl.textContent = game.holdEnabled()
-      ? 'Your pieces — drag one, or tap then Hold to park'
-      : 'Your pieces — drag one onto the board';
+    hintEl.textContent = game.mode === 'puzzle'
+      ? puzzleHint()
+      : game.holdEnabled()
+        ? 'Your pieces — drag one, or tap then Hold to park'
+        : 'Your pieces — drag one onto the board';
     hintEl.classList.remove('hint-active');
   }
 }
@@ -980,7 +1152,7 @@ function clearHintHighlight(): void {
 function resetHintTimer(): void {
   stopHintTimer();
   clearHintHighlight();
-  if (game.gameOver) return;
+  if (game.gameOver || game.puzzleWon) return;
   hintTimer = setTimeout(() => showStuckHint(), HINT_IDLE_MS);
 }
 
@@ -1021,7 +1193,7 @@ function showStuckHint(): void {
 }
 
 function maybeCheerNewBest(): void {
-  if (cheeredBestThisGame) return;
+  if (cheeredBestThisGame || game.practiceRun()) return;
   const target = bestTarget();
   if (game.score <= target) return;
   cheeredBestThisGame = true;
@@ -1037,6 +1209,13 @@ function flashCelebrate(text: string): void {
   celebrateBanner.classList.remove('show');
   void celebrateBanner.offsetWidth;
   celebrateBanner.classList.add('show');
+}
+
+/** Calm one-time note when a Daily bonus goal is first met. The run keeps going. */
+function celebrateDailyGoal(justMet: boolean): void {
+  if (!justMet) return;
+  flashCelebrate('Goal complete!');
+  showToast('Goal complete!');
 }
 
 function checkAndToastGoals(): void {
@@ -1064,8 +1243,11 @@ function onGameOver(): void {
   }
 
   overTitle.textContent = 'Great game!';
+  overSub.textContent = game.dailyOverText() || 'The board is too full for your remaining pieces.';
   finalScore.textContent = String(game.score);
-  bestNote.textContent = `${bestLabel.textContent}: ${bestTarget()}`;
+  bestNote.textContent = game.practiceRun()
+    ? 'Practice run - not counted'
+    : `${bestLabel.textContent}: ${bestTarget()}`;
   shareBtn.hidden = !game.expert;
   overlay.classList.add('show', 'overlay-pop');
 
@@ -1081,6 +1263,7 @@ function onGameOver(): void {
 function finalizeGameOverIfNeeded(): void {
   if (gameOverFinalized || !game.gameOver) return;
   gameOverFinalized = true;
+  const practice = game.practiceRun();
   const result = recordGameFinished(profile, {
     mode: game.mode,
     score: game.score,
@@ -1088,6 +1271,8 @@ function finalizeGameOverIfNeeded(): void {
     week: game.mode === 'weekly' ? game.periodKey : undefined,
     date: game.mode === 'daily' ? game.periodKey : undefined,
     expert: game.expert,
+    practice,
+    dailyGoalMet: game.mode === 'daily' && game.dailyProgress()?.met === true,
   });
   saveProfile(profile);
   checkAndToastGoals();
@@ -1097,7 +1282,9 @@ function finalizeGameOverIfNeeded(): void {
     result.newDailyBest ||
     result.newWeeklyBest ||
     result.newBlitzBest;
-  if (isBest) {
+  if (practice) {
+    sfx.gameOver();
+  } else if (isBest) {
     overTitle.textContent = 'New personal best!';
     bestNote.textContent = 'That’s a new personal best — amazing!';
     sfx.cheer();
@@ -1106,11 +1293,12 @@ function finalizeGameOverIfNeeded(): void {
     sfx.gameOver();
   }
   if (game.mode === 'daily') showToast('Daily puzzle finished');
-  void maybeSubmitBoardScore();
+  if (!practice) void maybeSubmitBoardScore();
 }
 
 async function maybeSubmitBoardScore(): Promise<void> {
-  if (!profile.leaderboardOn) return;
+  // Hold and Gentle/Deep calm runs are practice. They never post.
+  if (game.practiceRun() || !profile.leaderboardOn) return;
   const name = profile.leaderboardName.trim();
   if (!name || game.score < 1) return;
   const periodKey =
@@ -1154,7 +1342,64 @@ function startFresh(): void {
 }
 
 function showGameOver(): void {
+  if (game.mode === 'puzzle') {
+    showPuzzleEnd();
+    return;
+  }
   onGameOver();
+}
+
+function commitPuzzleSolve(): void {
+  if (game.mode !== 'puzzle' || !game.puzzleWon || !game.puzzleId) return;
+  // Remember the entry from before this win so Undo of the winning move can take it back.
+  if (!puzzleSolveSnapshot || puzzleSolveSnapshot.id !== game.puzzleId) {
+    const prev = profile.puzzlesSolved[game.puzzleId];
+    puzzleSolveSnapshot = { id: game.puzzleId, prev: prev ? { ...prev } : undefined };
+  }
+  recordPuzzleSolved(profile, game.puzzleId, game.puzzleMoves);
+  checkAndToastGoals();
+}
+
+function revertPuzzleSolveIfUndone(): void {
+  const snap = puzzleSolveSnapshot;
+  if (!snap || game.mode !== 'puzzle' || game.puzzleWon) return;
+  if (snap.prev) profile.puzzlesSolved[snap.id] = snap.prev;
+  else delete profile.puzzlesSolved[snap.id];
+  puzzleSolveSnapshot = null;
+  saveProfile(profile);
+}
+
+function showPuzzleEnd(): void {
+  stopHintTimer();
+  clearHintHighlight();
+  selectedTrayForHold = null;
+  const puzzle = getPuzzle(game.puzzleId ?? '');
+  const won = game.puzzleWon;
+  if (won) commitPuzzleSolve();
+  overTitle.textContent = won ? 'Puzzle complete' : 'No moves left';
+  overSub.textContent = won
+    ? (puzzle?.name ?? 'Nice and tidy.')
+    : 'Nothing else fits. Retry whenever you like.';
+  finalLabel.textContent = 'Moves';
+  finalScore.textContent = String(game.puzzleMoves);
+  const par = puzzle?.parMoves;
+  bestNote.textContent = won && par != null
+    ? (game.puzzleMoves <= par ? `Par ${par}` : `Par was ${par}`)
+    : '';
+  const next = won && game.puzzleId ? nextPuzzleId(game.puzzleId) : null;
+  againBtn.textContent = won ? (next ? 'Next puzzle' : 'Back to puzzles') : 'Retry';
+  overHomeBtn.textContent = 'Back';
+  shareBtn.hidden = true;
+  const canUndoLast = game.canUndo();
+  overUndoBtn.hidden = !canUndoLast;
+  if (canUndoLast) overUndoBtn.textContent = 'Undo last move';
+  overlay.classList.add('show', 'overlay-pop');
+  if (won) {
+    sfx.nice();
+    hapticCheer();
+  } else {
+    sfx.bad();
+  }
 }
 
 function hideGameOver(): void {
@@ -1380,7 +1625,7 @@ function syncBoardWeather(combo: number, streak: number, cleared: boolean): void
   }
 }
 
-function flashBanners(combo: number, streak: number, cleared: boolean): void {
+function flashBanners(combo: number, streak: number, cleared: boolean, allClear = false): void {
   if (!cleared) {
     syncBoardWeather(0, 0, false);
     return;
@@ -1394,9 +1639,9 @@ function flashBanners(combo: number, streak: number, cleared: boolean): void {
     void comboBanner.offsetWidth;
     comboBanner.classList.add('show');
     if (combo >= 3) comboBanner.classList.add('combo-big');
-    flashCelebrate(combo >= 3 ? 'Amazing!' : 'Nice!');
+    flashCelebrate(allClear ? 'All clear!' : combo >= 3 ? 'Amazing!' : 'Nice!');
   } else {
-    flashCelebrate('Nice!');
+    flashCelebrate(allClear ? 'All clear!' : 'Nice!');
   }
 
   if (streak >= 2) {
@@ -1408,7 +1653,7 @@ function flashBanners(combo: number, streak: number, cleared: boolean): void {
 }
 
 function showScorePop(points: number, clientX: number, clientY: number): void {
-  if (points <= 0) return;
+  if (game.mode === 'puzzle' || points <= 0) return;
   const el = document.createElement('div');
   el.className = 'score-pop';
   el.textContent = `+${points}`;
@@ -1824,16 +2069,19 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
   }
 
   selectedTrayForHold = null;
-  recordPlacement(profile, {
-    combo: result.score.comboMultiplier,
-    streak: result.score.streak,
-    clearCount: result.clears.clearCount,
-    cellsCleared: result.clears.cells.length,
-  });
+  if (game.mode !== 'puzzle') {
+    recordPlacement(profile, {
+      combo: result.score.comboMultiplier,
+      streak: result.score.streak,
+      clearCount: result.clears.clearCount,
+      cellsCleared: result.clears.cells.length,
+      allClear: result.score.allClear,
+    });
+    maybeCheerNewBest();
+    saveProfile(profile);
+    checkAndToastGoals();
+  }
   sessionClears = game.clearsThisGame;
-  maybeCheerNewBest();
-  saveProfile(profile);
-  checkAndToastGoals();
 
   sfx.place(cellCount(piece.cells));
   hapticPlace();
@@ -1862,7 +2110,8 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
     sfx.clear(result.score.comboMultiplier, result.score.streak);
     hapticClear(result.score.comboMultiplier);
     if (result.score.comboMultiplier >= 2) sfx.whoosh();
-    flashBanners(result.score.comboMultiplier, result.score.streak, true);
+    flashBanners(result.score.comboMultiplier, result.score.streak, true, result.score.allClear);
+    celebrateDailyGoal(result.goalJustMet);
     showScorePop(result.score.total, x, y);
 
     const sessionAtClear = playSessionId;
@@ -1878,17 +2127,20 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
       paintHold();
       if (result.dealt) sfx.refill();
       updateHud();
-      if (result.gameOver && game.gameOver) showGameOver();
+      if (game.mode === 'puzzle' && (game.puzzleWon || game.gameOver)) showPuzzleEnd();
+      else if (result.gameOver && game.gameOver) showGameOver();
       else resetHintTimer();
     }, 420 + maxDelay);
   } else {
     syncBoardWeather(0, 0, false);
+    celebrateDailyGoal(result.goalJustMet);
     showScorePop(result.score.total, x, y);
     paintTray(result.dealt);
     paintHold();
     if (result.dealt) sfx.refill();
     updateHud();
-    if (result.gameOver) showGameOver();
+    if (game.mode === 'puzzle' && (game.puzzleWon || game.gameOver)) showPuzzleEnd();
+    else if (result.gameOver) showGameOver();
     else resetHintTimer();
   }
 }
@@ -2040,12 +2292,14 @@ async function runUpdateCheck(opts: {
 
 function handleHardwareBack(): void {
   if (handleOverlayBack()) return;
-  if (appView === 'play') {
-    finalizeGameOverIfNeeded();
-    showHome();
+  const dest = backDestination(appView, appView === 'play' && game.mode === 'puzzle');
+  if (dest === 'puzzles') {
+    commitPuzzleSolve();
+    showPuzzleList();
     return;
   }
-  if (appView === 'panel') {
+  if (dest === 'home') {
+    if (appView === 'play') finalizeGameOverIfNeeded();
     showHome();
     return;
   }

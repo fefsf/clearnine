@@ -1218,6 +1218,20 @@ body {
   flex-shrink: 0;
 }
 
+.daily-rule {
+  margin: 0 0 2px;
+  padding: 0 8px;
+  text-align: center;
+  font-size: 0.82rem;
+  font-weight: 700;
+  line-height: 1.25;
+  color: var(--text-dim);
+  flex-shrink: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .hold-wrap {
   display: flex;
   align-items: center;
@@ -1351,6 +1365,13 @@ body {
 
 .home-screen .menu-meta {
   font-size: var(--home-meta);
+}
+
+.home-screen #btn-daily .menu-meta {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
 
 .home-screen .menu-row {
@@ -1524,6 +1545,18 @@ body {
   font-weight: 800;
 }
 
+.stat-note {
+  display: block;
+  margin-top: 2px;
+  font-size: 0.92rem;
+  font-weight: 700;
+  color: var(--text-dim);
+}
+
+.lifetime-grid .stat-card {
+  padding: 11px 10px;
+}
+
 .section-title {
   margin: 20px 0 10px;
   font-size: 1.2rem;
@@ -1631,6 +1664,26 @@ body {
 
 .goal-item:not(.done) .goal-status {
   color: var(--text-dim);
+}
+
+.goal-item:not(.done) .goal-status.counting {
+  color: var(--accent);
+}
+
+.goal-meter {
+  margin-top: 8px;
+  height: 4px;
+  border-radius: 99px;
+  background: color-mix(in srgb, var(--text-dim) 35%, transparent);
+  overflow: hidden;
+}
+
+.goal-meter > span {
+  display: block;
+  height: 100%;
+  max-width: 100%;
+  border-radius: inherit;
+  background: var(--accent);
 }
 
 .theme-grid {
@@ -2354,6 +2407,11 @@ html[data-season][data-theme='wood'] .tool-btn {
     display: none;
   }
 
+  .daily-rule {
+    font-size: 0.72rem;
+    margin: 0;
+  }
+
   .hold-hint {
     display: none;
   }
@@ -2412,6 +2470,11 @@ html[data-season][data-theme='wood'] .tool-btn {
 #app.play-compact .beat-target,
 #app.play-compact .tool-meta {
   display: none;
+}
+
+#app.play-compact .daily-rule {
+  font-size: 0.72rem;
+  margin: 0;
 }
 
 #app.play-compact .hold-slot {
@@ -2643,6 +2706,54 @@ a:focus-visible,
   width: 1px;
   height: 1px;
   opacity: 0;
+}
+
+.score-value.score-objective {
+  font-size: 1.05rem;
+  line-height: 1.25;
+}
+
+.puzzle-pack {
+  margin: 0 0 16px;
+}
+
+.puzzle-pack-title {
+  margin: 0 0 2px;
+  font-family: var(--font-display);
+  font-size: 1.35rem;
+  color: var(--accent);
+}
+
+.puzzle-pack-blurb {
+  margin: 0 0 8px;
+  color: var(--text-dim);
+  font-weight: 700;
+  font-size: 0.92rem;
+}
+
+.puzzle-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.puzzle-card {
+  min-height: 72px;
+  text-align: left;
+  padding: 10px 12px;
+}
+
+.puzzle-card .menu-title {
+  font-size: 1.02rem;
+}
+
+.puzzle-card .menu-meta {
+  font-size: 0.78rem;
+  line-height: 1.25;
+}
+
+.puzzle-card.solved {
+  border-color: var(--accent);
 }
 
 

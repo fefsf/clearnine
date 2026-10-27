@@ -5,10 +5,15 @@ import { dailyPlayStreak, migrateProfile, type GameMode } from '../game/stats';
  * Local progress backup (no cloud).
  *
  * Included: `clearnine-profile` (scores, stats, settings, tutorial flags,
- * leaderboard name and opt-in) and in-progress saves for classic, daily,
- * weekly, and blitz, including the expert-tagged keys.
+ * leaderboard name and opt-in, dates a Daily goal was met, and
+ * `puzzlesSolved` — a map of puzzle id to `{ moves }` with integer move
+ * counts, validated when the profile is migrated) and in-progress
+ * saves for classic, daily, weekly, and blitz, including the expert-tagged
+ * keys. Daily saves may also carry the in-progress goal counters.
  *
- * Excluded: `clearnine-device-id` (so a restore on another phone does not
+ * Excluded: the in-progress puzzle save (`clearnine-save-puzzle` — resume
+ * is local to this device; solved puzzles travel inside the profile),
+ * `clearnine-device-id` (so a restore on another phone does not
  * clone leaderboard identity), update check / skip / snooze keys, legacy
  * keys, and `clearnine-pending-finalize`. That pending key is cleared on
  * import so a half-finished run on this phone is not credited on top of
@@ -125,6 +130,12 @@ function whole(value: unknown): number | null {
   return Math.floor(value);
 }
 
+/** Absent field stays absent. A present value must be a safe count, or the save is rejected. */
+function optionalWhole(value: unknown): number | null | undefined {
+  if (value === undefined) return undefined;
+  return whole(value);
+}
+
 function readBoard(value: unknown): number[][] | null {
   if (!Array.isArray(value) || value.length !== 9) return null;
   const board: number[][] = [];
@@ -224,9 +235,22 @@ function sanitizeSave(spec: { mode: GameMode; expert: boolean }, value: JsonObje
     clearsThisGame: clears,
     expert: spec.expert,
   };
+  if (value.holdOption === true) save.holdOption = true;
+  if (value.dealDepth === 'gentle' || value.dealDepth === 'normal' || value.dealDepth === 'deep') {
+    save.dealDepth = value.dealDepth;
+  }
   if (spec.mode === 'daily') {
     if (typeof value.dailyDate !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value.dailyDate)) return null;
     save.dailyDate = value.dailyDate;
+    const lines = optionalWhole(value.dailyLines);
+    const regions = optionalWhole(value.dailyRegions);
+    const combos = optionalWhole(value.dailyCombos);
+    if (lines === null || regions === null || combos === null) return null;
+    if (lines !== undefined) save.dailyLines = lines;
+    if (regions !== undefined) save.dailyRegions = regions;
+    if (combos !== undefined) save.dailyCombos = combos;
+    if (value.dailyGoalMet !== undefined && typeof value.dailyGoalMet !== 'boolean') return null;
+    if (value.dailyGoalMet === true) save.dailyGoalMet = true;
   }
   if (spec.mode === 'weekly') {
     if (typeof value.weekKey !== 'string' || !/^\d{4}-W\d{2}$/.test(value.weekKey)) return null;
