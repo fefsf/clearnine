@@ -36,12 +36,53 @@ describe('checkForUpdate', () => {
     );
   }
 
-  it('always fetches on launch even if a previous check was recent', async () => {
+  it('does not hit GitHub when the last automatic check was recent', async () => {
     localStorage.setItem('clearnine-update-last-check', String(Date.now()));
+    stubRelease('99.0.0');
+    const result = await checkForUpdate({ force: false });
+    expect(result.status).toBe('up-to-date');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('records a successful check and skips the network for 24 hours', async () => {
+    stubRelease('99.0.0');
+    const first = await checkForUpdate({ force: false });
+    expect(first.status).toBe('update');
+    expect(fetch).toHaveBeenCalledTimes(1);
+    expect(Number(localStorage.getItem('clearnine-update-last-check'))).toBeGreaterThan(0);
+
+    vi.mocked(fetch).mockClear();
+    const second = await checkForUpdate({ force: false });
+    expect(second.status).toBe('up-to-date');
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('lets Settings force a check during the backoff window', async () => {
+    localStorage.setItem('clearnine-update-last-check', String(Date.now()));
+    stubRelease('99.0.0');
+    const result = await checkForUpdate({ force: true, respectSkip: false });
+    expect(result.status).toBe('update');
+    expect(fetch).toHaveBeenCalled();
+  });
+
+  it('checks again once the backoff has elapsed', async () => {
+    localStorage.setItem('clearnine-update-last-check', String(Date.now() - 25 * 60 * 60 * 1000));
     stubRelease('99.0.0');
     const result = await checkForUpdate({ force: false });
     expect(result.status).toBe('update');
     expect(fetch).toHaveBeenCalled();
+  });
+
+  it('does not record a check when GitHub cannot be reached', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('offline');
+      }),
+    );
+    const result = await checkForUpdate({ force: false });
+    expect(result.status).toBe('error');
+    expect(localStorage.getItem('clearnine-update-last-check')).toBeNull();
   });
 
   it('does not auto-prompt a snoozed version, but Settings force still does', async () => {

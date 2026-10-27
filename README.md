@@ -213,6 +213,7 @@ Expert scores are tracked separately from calm-mode bests, so turning Expert off
 - **My Scores** — best Play score, best today, daily streak, recent games, lifetime stats (plus Expert extras when enabled)
 - **Awards** — trophies for scores, combos, streaks, dedication, daily habits, and Expert mastery
 - **Colors (Themes)** — unlockable looks (see below)
+- **Backup** — export or import progress from Settings (a file on this device; nothing is uploaded)
 
 ### Themes
 

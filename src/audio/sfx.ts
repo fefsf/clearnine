@@ -96,6 +96,14 @@ export class Sfx {
     });
   }
 
+  /** One short, quiet seasonal hello. Never loops. */
+  seasonSting(notes: number[]): void {
+    notes.slice(0, 4).forEach((freq, i) => {
+      if (!Number.isFinite(freq) || freq <= 0) return;
+      this.pluck(freq, 0.1, 0.02, i * 0.11, 0.94);
+    });
+  }
+
   /** Short rising air for a multi-clear. */
   whoosh(): void {
     this.sweep(0.18, 0.045);

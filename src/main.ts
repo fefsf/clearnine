@@ -15,7 +15,7 @@ import {
   type GameMode,
   type Profile,
 } from './game/stats';
-import { applyTheme, isThemeUnlocked, THEMES } from './game/themes';
+import { applyTheme, getActiveSeason, isThemeUnlocked, resolveLook, THEMES } from './game/themes';
 import { Sfx } from './audio/sfx';
 import {
   hapticBad,
@@ -29,6 +29,8 @@ import {
 import {
   askConfirm,
   askUpdateAvailable,
+  homeDayLine,
+  homeSeasonLine,
   renderGoals,
   renderHome,
   renderHowTo,
@@ -55,6 +57,7 @@ import {
   type UpdateInfo,
 } from './app/update';
 import { APP_VERSION } from './app/version';
+import { CONFETTI_BURST, confettiBitsForCombo, sparkCountForClear } from './ui/fx-math';
 import { fetchBoard, submitScore, type BoardRow, type BoardTab } from './app/leaderboard';
 import { App } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
@@ -69,7 +72,18 @@ const sfx = new Sfx();
 let profile: Profile = loadProfile();
 sfx.muted = profile.mute;
 setHapticsEnabled(profile.haptics);
-applyTheme(profile.themeId);
+/** Season id that already played its home sting this session. */
+let stungSeasonId: string | null = null;
+
+function applyCurrentLook(date = new Date()): void {
+  applyTheme(profile.themeId, {
+    seasonal: profile.seasonal,
+    blockStyle: profile.blockStyle,
+    date,
+  });
+}
+
+applyCurrentLook();
 
 let sessionClears = 0;
 let hintTimer: ReturnType<typeof setTimeout> | null = null;
@@ -123,12 +137,39 @@ const handlers: ScreenHandlers = {
   onSelectTheme: (id) => {
     if (!isThemeUnlocked(profile, id)) return;
     profile.themeId = id;
+    profile.seasonal = 'off';
     saveProfile(profile);
-    applyTheme(id);
+    applyCurrentLook();
     hapticTap();
     sfx.tap();
     showThemes();
     showToast(`${THEMES.find((t) => t.id === id)?.name ?? id} colors are on`);
+  },
+  onSelectSeason: () => {
+    profile.seasonal = 'auto';
+    saveProfile(profile);
+    applyCurrentLook();
+    hapticTap();
+    sfx.tap();
+    showThemes();
+    const season = getActiveSeason(new Date());
+    showToast(season ? `${season.name} colors are on` : 'Seasonal colors are on');
+  },
+  onToggleSeasonal: () => {
+    profile.seasonal = profile.seasonal === 'off' ? 'auto' : 'off';
+    saveProfile(profile);
+    applyCurrentLook();
+    hapticTap();
+    sfx.tap();
+    showSettings();
+  },
+  onToggleBlockStyle: () => {
+    profile.blockStyle = profile.blockStyle === 'varied' ? 'uniform' : 'varied';
+    saveProfile(profile);
+    applyCurrentLook();
+    hapticTap();
+    sfx.tap();
+    showSettings();
   },
   onToggleMute: () => {
     sfx.toggleMute();
@@ -174,6 +215,16 @@ const handlers: ScreenHandlers = {
   onCheckUpdate: () => {
     void runUpdateCheck({ force: true, fromSettings: true });
   },
+  onShowTips: () => {
+    showTutorial(() => {
+      if (!profile.seenTutorial) {
+        profile.seenTutorial = true;
+        saveProfile(profile);
+      }
+      hapticTap();
+      sfx.nice();
+    });
+  },
 };
 
 async function beginMode(mode: GameMode): Promise<void> {
@@ -203,10 +254,35 @@ function showHome(): void {
   teardownHomeLayout();
   profile = loadProfile();
   appView = 'home';
+  applyCurrentLook();
   transitionScreen(app, () => {
     renderHome(app, profile, handlers, findContinueGame(profile.expertMode));
     setupHomeLayout();
+    maybeSeasonSting();
   });
+}
+
+function maybeSeasonSting(date = new Date()): void {
+  const { season } = resolveLook(
+    { themeId: profile.themeId, seasonal: profile.seasonal },
+    date,
+  );
+  if (!season || sfx.muted) return;
+  if (stungSeasonId === season.id) return;
+  stungSeasonId = season.id;
+  sfx.seasonSting(season.notes);
+}
+
+function refreshSeasonalLook(date = new Date()): void {
+  applyCurrentLook(date);
+  if (appView !== 'home') return;
+  const screen = app.querySelector('.home-screen');
+  if (!screen) return;
+  const day = homeDayLine(profile, date);
+  const season = homeSeasonLine(profile, date);
+  const shownDay = screen.querySelector('.home-dayline')?.textContent ?? '';
+  const shownSeason = screen.querySelector('.home-season')?.textContent ?? '';
+  if (shownDay !== day || shownSeason !== season) showHome();
 }
 
 function showRecords(): void {
@@ -579,6 +655,11 @@ function bindPlayDom(): void {
   const performUndo = (): boolean => {
     const result = game.undo();
     if (!result.ok) return false;
+    // A pending clear animation must not pop the game-over overlay for a move we just undid.
+    if (clearAnimTimer) {
+      clearTimeout(clearAnimTimer);
+      clearAnimTimer = null;
+    }
     sessionClears = game.clearsThisGame;
     if (result.placement) {
       reversePlacement(profile, {
@@ -1098,21 +1179,35 @@ async function shareRunScore(): Promise<void> {
   }
 }
 
-function spawnClearSparks(cellsList: { r: number; c: number }[]): void {
+function prefersReducedMotion(): boolean {
+  return (
+    typeof window.matchMedia === 'function' &&
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+  );
+}
+
+function spawnClearSparks(
+  cellsList: { r: number; c: number }[],
+  linesCleared: number,
+  comboMultiplier: number,
+): void {
+  if (prefersReducedMotion()) return;
+  const count = sparkCountForClear(cellsList.length, linesCleared, comboMultiplier);
+  if (count <= 0 || cellsList.length === 0) return;
   const layer = document.createElement('div');
   layer.className = 'spark-layer';
   boardEl.appendChild(layer);
   const boardRect = boardEl.getBoundingClientRect();
-  const cap = Math.min(12, cellsList.length);
-  for (let n = 0; n < cap; n++) {
-    const { r, c } = cellsList[n]!;
+  for (let n = 0; n < count; n++) {
+    const { r, c } = cellsList[n % cellsList.length]!;
     const cell = cellAt(r, c);
     const rect = cell.getBoundingClientRect();
     const spark = document.createElement('span');
     spark.className = 'spark';
     const x = rect.left - boardRect.left + rect.width / 2;
     const y = rect.top - boardRect.top + rect.height / 2;
-    spark.style.left = `${x}px`;
+    const dup = n >= cellsList.length ? ((n % 7) - 3) * 3 : 0;
+    spark.style.left = `${x + dup}px`;
     spark.style.top = `${y}px`;
     spark.style.setProperty('--sx', `${(Math.random() - 0.5) * 36}px`);
     spark.style.setProperty('--sy', `${-12 - Math.random() * 28}px`);
@@ -1210,12 +1305,15 @@ function clearCascadeDelays(
   return delays;
 }
 
-function spawnConfetti(): void {
+function spawnConfetti(bits: number = CONFETTI_BURST): void {
+  if (prefersReducedMotion()) return;
+  const total = Math.min(CONFETTI_BURST, Math.max(0, Math.floor(bits)));
+  if (total === 0) return;
   const layer = document.createElement('div');
   layer.className = 'confetti-layer';
   document.body.appendChild(layer);
   const colors = ['var(--accent)', 'var(--accent-warm)', 'var(--c1)', '#fff'];
-  for (let i = 0; i < 28; i++) {
+  for (let i = 0; i < total; i++) {
     const bit = document.createElement('span');
     bit.className = 'confetti-bit';
     bit.style.left = `${10 + Math.random() * 80}%`;
@@ -1754,7 +1852,13 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
       cell.classList.add('flash-clear', 'clearing');
       cell.style.animationDelay = `${delay}ms`;
     }
-    spawnClearSparks(result.clears.cells);
+    spawnClearSparks(
+      result.clears.cells,
+      result.clears.clearCount,
+      result.score.comboMultiplier,
+    );
+    const comboBits = confettiBitsForCombo(result.score.comboMultiplier);
+    if (comboBits > 0) spawnConfetti(comboBits);
     sfx.clear(result.score.comboMultiplier, result.score.streak);
     hapticClear(result.score.comboMultiplier);
     if (result.score.comboMultiplier >= 2) sfx.whoosh();
@@ -1774,7 +1878,7 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
       paintHold();
       if (result.dealt) sfx.refill();
       updateHud();
-      if (result.gameOver) showGameOver();
+      if (result.gameOver && game.gameOver) showGameOver();
       else resetHintTimer();
     }, 420 + maxDelay);
   } else {
@@ -1868,12 +1972,16 @@ async function promptUpdate(info: UpdateInfo): Promise<void> {
   }
 }
 
+/** Last version string reported by Capacitor App.getInfo(). */
+let nativeAppVersion: string | null = null;
+
 async function installedAppVersion(): Promise<string> {
   if (Capacitor.isNativePlatform()) {
     try {
       const info = await App.getInfo();
       const native = info.version?.trim();
       if (native) {
+        nativeAppVersion = native;
         return isNewerVersion(native, APP_VERSION) ? native : APP_VERSION;
       }
     } catch {
@@ -1889,6 +1997,7 @@ async function restartIfApkNewerThanBundle(): Promise<boolean> {
   try {
     const info = await App.getInfo();
     const native = info.version?.trim();
+    if (native) nativeAppVersion = native;
     if (!native || !isNewerVersion(native, APP_VERSION)) return false;
     showToast('Update installed — reopening');
     window.setTimeout(() => {
@@ -1921,7 +2030,7 @@ async function runUpdateCheck(opts: {
   if (!fromSettings) return;
 
   if (result.status === 'up-to-date' || result.status === 'skipped') {
-    showToast(`You're on the latest version (${APP_VERSION})`);
+    showToast(`You're on the latest version (${nativeAppVersion ?? APP_VERSION})`);
   } else if (result.status === 'offline') {
     showToast('No connection — try again later');
   } else if (result.status === 'error') {
@@ -1959,11 +2068,14 @@ function bindHardwareBack(): void {
 }
 
 function boot(): void {
+  applyCurrentLook();
   setStorageFailHandler((message) => showToast(message));
   bindHardwareBack();
   if (Capacitor.isNativePlatform()) {
     void App.addListener('appStateChange', ({ isActive }) => {
-      if (isActive) void restartIfApkNewerThanBundle();
+      if (!isActive) return;
+      refreshSeasonalLook();
+      void restartIfApkNewerThanBundle();
     });
   }
   showSplash(() => {

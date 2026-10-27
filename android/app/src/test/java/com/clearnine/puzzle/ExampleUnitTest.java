@@ -1,4 +1,4 @@
-package com.getcapacitor.myapp;
+package com.clearnine.puzzle;
 
 import static org.junit.Assert.*;
 

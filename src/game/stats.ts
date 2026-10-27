@@ -1,4 +1,5 @@
 import { writeLocal } from '../app/storage';
+import { evaluateGoals } from './goals';
 import { addDays, todayKey } from './rng';
 
 export type GameMode = 'classic' | 'daily' | 'weekly' | 'blitz';
@@ -24,7 +25,11 @@ export type LifetimeStats = {
   weeklyKeys: string[];
 };
 
+/** Stored Profile shape. Older saves omit this and migrate to 1. */
+export const PROFILE_SCHEMA_VERSION = 1;
+
 export type Profile = {
+  schemaVersion: number;
   bestClassic: number;
   bestDaily: Record<string, number>;
   /** Expert Mode highs (separate so calm mode stays untouched). */
@@ -36,6 +41,10 @@ export type Profile = {
   stats: LifetimeStats;
   unlockedGoals: string[];
   themeId: string;
+  /** 'auto' follows the calendar. 'off' keeps themeId until turned back on. */
+  seasonal: 'auto' | 'off';
+  /** 'uniform' is one block hue. 'varied' uses a small palette. */
+  blockStyle: 'uniform' | 'varied';
   mute: boolean;
   haptics: boolean;
   seenTutorial: boolean;
@@ -64,6 +73,7 @@ export function emptyStats(): LifetimeStats {
 
 export function defaultProfile(): Profile {
   return {
+    schemaVersion: PROFILE_SCHEMA_VERSION,
     bestClassic: 0,
     bestDaily: {},
     bestClassicExpert: 0,
@@ -74,6 +84,8 @@ export function defaultProfile(): Profile {
     stats: emptyStats(),
     unlockedGoals: [],
     themeId: 'minimalist',
+    seasonal: 'auto',
+    blockStyle: 'uniform',
     mute: false,
     haptics: true,
     seenTutorial: false,
@@ -84,37 +96,164 @@ export function defaultProfile(): Profile {
   };
 }
 
+function finishLoad(profile: Profile): Profile {
+  if (settlePendingFinalizes(profile)) saveProfile(profile);
+  return profile;
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
+  const proto = Object.getPrototypeOf(value) as object | null;
+  return proto === Object.prototype || proto === null;
+}
+
+function wholeOrNull(value: unknown): number | null {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0 || value > 1_000_000_000) {
+    return null;
+  }
+  return Math.floor(value);
+}
+
+function countOr(value: unknown, fallback: number): number {
+  return wholeOrNull(value) ?? fallback;
+}
+
+function numberMap(value: unknown): Record<string, number> {
+  if (!isPlainObject(value)) return {};
+  const out: Record<string, number> = {};
+  let count = 0;
+  for (const key of Object.keys(value)) {
+    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
+    if (key.length === 0 || key.length > 40) continue;
+    const n = wholeOrNull(value[key]);
+    if (n == null) continue;
+    out[key] = n;
+    count += 1;
+    if (count >= 4000) break;
+  }
+  return out;
+}
+
+function stringList(value: unknown, max: number, maxLen: number): string[] {
+  if (!Array.isArray(value)) return [];
+  const out: string[] = [];
+  for (const item of value) {
+    if (typeof item !== 'string') continue;
+    const text = item.trim();
+    if (!text || text.length > maxLen) continue;
+    out.push(text);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+function flag(value: unknown, fallback: boolean): boolean {
+  return typeof value === 'boolean' ? value : fallback;
+}
+
+function themeIdOf(value: unknown): string {
+  if (typeof value !== 'string') return 'minimalist';
+  const id = value.trim().toLowerCase();
+  if (!/^[a-z0-9_-]{1,40}$/.test(id)) return 'minimalist';
+  return id;
+}
+
+function leaderboardNameOf(value: unknown): string {
+  if (typeof value !== 'string') return '';
+  return value.replace(/[\u0000-\u001F\u007F]/g, '').replace(/\s+/g, ' ').trim().slice(0, 20);
+}
+
+function isMode(value: unknown): value is GameMode {
+  return value === 'classic' || value === 'daily' || value === 'weekly' || value === 'blitz';
+}
+
+function migrateStats(value: unknown): LifetimeStats {
+  const src = isPlainObject(value) ? value : {};
+  return {
+    gamesPlayed: countOr(src.gamesPlayed, 0),
+    piecesPlaced: countOr(src.piecesPlaced, 0),
+    linesCleared: countOr(src.linesCleared, 0),
+    cellsCleared: countOr(src.cellsCleared, 0),
+    maxCombo: countOr(src.maxCombo, 0),
+    maxStreak: countOr(src.maxStreak, 0),
+    dailyDates: stringList(src.dailyDates, 4000, 32),
+    weeklyKeys: stringList(src.weeklyKeys, 2000, 16),
+  };
+}
+
+function migrateRecent(value: unknown): RecentGame[] {
+  if (!Array.isArray(value)) return [];
+  const out: RecentGame[] = [];
+  for (const item of value) {
+    if (!isPlainObject(item) || !isMode(item.mode)) continue;
+    const score = wholeOrNull(item.score);
+    const cleared = wholeOrNull(item.cleared);
+    if (score == null || cleared == null) continue;
+    if (typeof item.date !== 'string' || item.date.trim().length === 0 || item.date.length > 32) continue;
+    const game: RecentGame = {
+      mode: item.mode,
+      score,
+      date: item.date.trim(),
+      cleared,
+    };
+    if (typeof item.expert === 'boolean') game.expert = item.expert;
+    out.push(game);
+    if (out.length >= 20) break;
+  }
+  return out;
+}
+
+function stampSchema(incoming: number): number {
+  if (!Number.isFinite(incoming) || incoming < 1 || incoming > PROFILE_SCHEMA_VERSION) {
+    return PROFILE_SCHEMA_VERSION;
+  }
+  return incoming;
+}
+
+/**
+ * Normalize a stored profile. Missing schemaVersion (v0) becomes 1.
+ * A newer schemaVersion is read field-by-field and stamped as the current
+ * version so unknown extras cannot crash the app.
+ */
+export function migrateProfile(raw: unknown): Profile {
+  try {
+    const src = isPlainObject(raw) ? raw : {};
+    const incoming = typeof src.schemaVersion === 'number' ? src.schemaVersion : 0;
+    return {
+      schemaVersion: stampSchema(incoming),
+      bestClassic: countOr(src.bestClassic, 0),
+      bestDaily: numberMap(src.bestDaily),
+      bestClassicExpert: countOr(src.bestClassicExpert, 0),
+      bestDailyExpert: numberMap(src.bestDailyExpert),
+      bestWeekly: numberMap(src.bestWeekly),
+      bestBlitz: countOr(src.bestBlitz, 0),
+      recentGames: migrateRecent(src.recentGames),
+      stats: migrateStats(src.stats),
+      unlockedGoals: stringList(src.unlockedGoals, 200, 64),
+      themeId: themeIdOf(src.themeId),
+      seasonal: src.seasonal === 'off' ? 'off' : 'auto',
+      blockStyle: src.blockStyle === 'varied' ? 'varied' : 'uniform',
+      mute: flag(src.mute, false),
+      haptics: flag(src.haptics, true),
+      seenTutorial: flag(src.seenTutorial, false),
+      seenHoldCoach: src.seenHoldCoach === true,
+      expertMode: flag(src.expertMode, false),
+      leaderboardOn: flag(src.leaderboardOn, false),
+      leaderboardName: leaderboardNameOf(src.leaderboardName),
+    };
+  } catch {
+    return defaultProfile();
+  }
+}
+
 export function loadProfile(): Profile {
   try {
     const raw = localStorage.getItem(STORAGE_PROFILE);
-    if (raw) {
-      const parsed = JSON.parse(raw) as Partial<Profile>;
-      return {
-        ...defaultProfile(),
-        ...parsed,
-        stats: { ...emptyStats(), ...parsed.stats },
-        bestDaily: parsed.bestDaily ?? {},
-        bestDailyExpert: parsed.bestDailyExpert ?? {},
-        bestWeekly: parsed.bestWeekly ?? {},
-        bestClassicExpert: parsed.bestClassicExpert ?? 0,
-        bestBlitz: parsed.bestBlitz ?? 0,
-        recentGames: parsed.recentGames ?? [],
-        unlockedGoals: parsed.unlockedGoals ?? [],
-        haptics: parsed.haptics ?? true,
-        expertMode: parsed.expertMode ?? false,
-        leaderboardOn: parsed.leaderboardOn ?? false,
-        leaderboardName: typeof parsed.leaderboardName === 'string' ? parsed.leaderboardName : '',
-        seenTutorial:
-          typeof parsed.seenTutorial === 'boolean'
-            ? parsed.seenTutorial
-            : false,
-        seenHoldCoach: parsed.seenHoldCoach === true,
-      };
-    }
+    if (raw) return finishLoad(migrateProfile(JSON.parse(raw) as unknown));
   } catch {
     /* fall through to migrate */
   }
-  return migrateLegacy();
+  return finishLoad(migrateLegacy());
 }
 
 function migrateLegacy(): Profile {
@@ -149,16 +288,34 @@ export function dailyPlayStreak(profile: Profile, today = todayKey()): number {
   const set = new Set(profile.stats.dailyDates);
   let streak = 0;
   let cursor = set.has(today) ? today : addDays(today, -1);
-  if (!set.has(cursor) && cursor !== today) return 0;
-  if (!set.has(today) && !set.has(addDays(today, -1))) return 0;
-  if (!set.has(today)) {
-    // streak counted through yesterday only
-  }
+  if (!set.has(cursor)) return 0;
   while (set.has(cursor)) {
     streak += 1;
     cursor = addDays(cursor, -1);
   }
   return streak;
+}
+
+type PlacementSnap = {
+  maxCombo: number;
+  maxStreak: number;
+  unlockedGoals: string[];
+};
+
+/**
+ * Undo can roll back max combo, max streak, and trophies earned by that move.
+ * Snapshots live only as long as the profile object does — relaunch drops the
+ * undo stack too, so there is nothing to restore.
+ */
+const placementSnaps = new WeakMap<Profile, PlacementSnap[]>();
+
+function snapStack(profile: Profile): PlacementSnap[] {
+  let stack = placementSnaps.get(profile);
+  if (!stack) {
+    stack = [];
+    placementSnaps.set(profile, stack);
+  }
+  return stack;
 }
 
 export function recordPlacement(
@@ -170,14 +327,22 @@ export function recordPlacement(
     cellsCleared: number;
   },
 ): void {
+  snapStack(profile).push({
+    maxCombo: profile.stats.maxCombo,
+    maxStreak: profile.stats.maxStreak,
+    unlockedGoals: profile.unlockedGoals.slice(),
+  });
   profile.stats.piecesPlaced += 1;
   profile.stats.linesCleared += opts.clearCount;
   profile.stats.cellsCleared += opts.cellsCleared;
-  profile.stats.maxCombo = Math.max(profile.stats.maxCombo, opts.combo);
+  // scorePlacement reports comboMultiplier 1 when the move did not combo.
+  if (opts.combo >= 2) {
+    profile.stats.maxCombo = Math.max(profile.stats.maxCombo, opts.combo);
+  }
   profile.stats.maxStreak = Math.max(profile.stats.maxStreak, opts.streak);
 }
 
-/** Roll back a placement that was undone (counts only; lifetime maxes stay). */
+/** Roll back a placement that was undone, including maxes and trophies from that move. */
 export function reversePlacement(
   profile: Profile,
   opts: {
@@ -188,19 +353,128 @@ export function reversePlacement(
   profile.stats.piecesPlaced = Math.max(0, profile.stats.piecesPlaced - 1);
   profile.stats.linesCleared = Math.max(0, profile.stats.linesCleared - opts.clearCount);
   profile.stats.cellsCleared = Math.max(0, profile.stats.cellsCleared - opts.cellsCleared);
+  const snap = snapStack(profile).pop();
+  if (!snap) return;
+  profile.stats.maxCombo = snap.maxCombo;
+  profile.stats.maxStreak = snap.maxStreak;
+  profile.unlockedGoals = snap.unlockedGoals.slice();
 }
 
-export function recordGameFinished(
-  profile: Profile,
-  opts: {
-    mode: GameMode;
-    score: number;
-    cleared: number;
-    date?: string;
-    week?: string;
-    expert?: boolean;
-  },
-): { newClassicBest: boolean; newDailyBest: boolean; newWeeklyBest: boolean; newBlitzBest: boolean } {
+const PENDING_KEY = 'clearnine-pending-finalize';
+
+type PendingFinalize = {
+  mode: GameMode;
+  expert: boolean;
+  score: number;
+  cleared: number;
+  date: string;
+  week?: string;
+};
+
+type FinishOpts = {
+  mode: GameMode;
+  score: number;
+  cleared: number;
+  date?: string;
+  week?: string;
+  expert?: boolean;
+};
+
+type FinishFlags = {
+  newClassicBest: boolean;
+  newDailyBest: boolean;
+  newWeeklyBest: boolean;
+  newBlitzBest: boolean;
+};
+
+const FINISH_MODES = new Set<GameMode>(['classic', 'daily', 'weekly', 'blitz']);
+
+function isPending(value: unknown): value is PendingFinalize {
+  if (!value || typeof value !== 'object') return false;
+  const item = value as PendingFinalize;
+  return (
+    FINISH_MODES.has(item.mode) &&
+    typeof item.score === 'number' &&
+    typeof item.cleared === 'number' &&
+    typeof item.date === 'string'
+  );
+}
+
+function readPending(): PendingFinalize[] {
+  try {
+    const raw = localStorage.getItem(PENDING_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isPending);
+  } catch {
+    return [];
+  }
+}
+
+function writePending(items: PendingFinalize[]): void {
+  if (items.length === 0) {
+    try {
+      localStorage.removeItem(PENDING_KEY);
+    } catch {
+      /* ignore */
+    }
+    return;
+  }
+  writeLocal(PENDING_KEY, JSON.stringify(items));
+}
+
+function sameSlot(item: PendingFinalize, mode: GameMode, expert: boolean): boolean {
+  return item.mode === mode && !!item.expert === expert;
+}
+
+/** Park a finished run so a kill during the undo window still credits it. */
+export function stagePendingFinalize(entry: PendingFinalize): void {
+  const expert = !!entry.expert;
+  const next = readPending().filter((item) => !sameSlot(item, entry.mode, expert));
+  next.push({
+    mode: entry.mode,
+    expert,
+    score: entry.score,
+    cleared: entry.cleared,
+    date: entry.date,
+    week: entry.week,
+  });
+  writePending(next);
+}
+
+/** Forget a staged finish (the player undid the move that ended the run). */
+export function discardPendingFinalize(mode: GameMode, expert = false): void {
+  writePending(readPending().filter((item) => !sameSlot(item, mode, !!expert)));
+}
+
+function takePending(mode: GameMode, expert: boolean): PendingFinalize | null {
+  const items = readPending();
+  const found = items.find((item) => sameSlot(item, mode, expert)) ?? null;
+  if (!found) return null;
+  writePending(items.filter((item) => !sameSlot(item, mode, expert)));
+  return found;
+}
+
+function sameFinish(pending: PendingFinalize, opts: FinishOpts): boolean {
+  const expert = !!(opts.expert ?? false);
+  if (!sameSlot(pending, opts.mode, expert)) return false;
+  if (pending.score !== opts.score || pending.cleared !== opts.cleared) return false;
+  if ((pending.week ?? '') !== (opts.week ?? '')) return false;
+  if (opts.mode === 'daily' && opts.date && pending.date !== opts.date) return false;
+  return true;
+}
+
+function settlePendingFinalizes(profile: Profile): boolean {
+  const pending = readPending();
+  if (pending.length === 0) return false;
+  writePending([]);
+  for (const item of pending) commitFinishedGame(profile, item);
+  evaluateGoals(profile);
+  return true;
+}
+
+function commitFinishedGame(profile: Profile, opts: FinishOpts): FinishFlags {
   const date = opts.date ?? todayKey();
   const expert = opts.expert ?? false;
   profile.stats.gamesPlayed += 1;
@@ -258,6 +532,16 @@ export function recordGameFinished(
   });
   profile.recentGames = profile.recentGames.slice(0, 20);
 
-  saveProfile(profile);
   return { newClassicBest, newDailyBest, newWeeklyBest, newBlitzBest };
+}
+
+export function recordGameFinished(profile: Profile, opts: FinishOpts): FinishFlags {
+  const expert = opts.expert ?? false;
+  const pending = takePending(opts.mode, expert);
+  if (pending && !sameFinish(pending, opts)) {
+    commitFinishedGame(profile, pending);
+  }
+  const flags = commitFinishedGame(profile, opts);
+  saveProfile(profile);
+  return flags;
 }

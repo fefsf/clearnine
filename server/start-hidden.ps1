@@ -18,6 +18,9 @@ function Test-Listening {
 
 if (Test-Listening) { exit 0 }
 
+# Cloudflare is the only public path; trust the proxy-appended client hop.
+$env:C9_TRUST_PROXY = '1'
+
 $logDir = Join-Path $root 'logs'
 if (-not (Test-Path $logDir)) {
   New-Item -ItemType Directory -Path $logDir | Out-Null

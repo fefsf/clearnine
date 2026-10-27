@@ -8,13 +8,25 @@ import {
 } from '../game/stats';
 import {
   THEMES,
+  getActiveSeason,
   isThemeUnlocked,
+  seasonRangeLabel,
   themeUnlockHint,
 } from '../game/themes';
 import { EXPERT_BLURB, EXPERT_FEATURE_LINES, getWeeklyMandate, weekKey } from '../game/expert';
 import { todayKey } from '../game/rng';
 import { APP_VERSION } from '../app/version';
 import type { BoardRow, BoardTab } from '../app/leaderboard';
+import {
+  applyBackup,
+  BACKUP_PROFILE_KEY,
+  backupSummary,
+  buildBackup,
+  formatBackupSummary,
+  MAX_BACKUP_CHARS,
+  parseBackup,
+  serializeBackup,
+} from '../app/backup';
 
 export { APP_VERSION };
 export type ContinueInfo = { mode: GameMode; score: number; expert?: boolean };
@@ -33,12 +45,16 @@ export type ScreenHandlers = {
   onBoard: () => void;
   onBackHome: () => void;
   onSelectTheme: (id: string) => void;
+  onSelectSeason: () => void;
+  onToggleSeasonal: () => void;
+  onToggleBlockStyle: () => void;
   onToggleMute: () => void;
   onToggleHaptics: () => void;
   onToggleExpert: () => void;
   onToggleLeaderboard: () => void;
   onSaveLeaderboardName: (name: string) => void;
   onCheckUpdate: () => void;
+  onShowTips: () => void;
 };
 
 function backButton(): string {
@@ -50,6 +66,22 @@ function modeLabel(mode: GameMode): string {
   if (mode === 'weekly') return 'Weekly';
   if (mode === 'blitz') return 'Endgame Sprint';
   return 'Play';
+}
+
+const WEEKDAYS = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+
+export function homeDayLine(profile: Profile, date = new Date()): string {
+  const weekday = WEEKDAYS[date.getDay()] ?? 'Today';
+  const done = profile.stats.dailyDates.includes(todayKey(date));
+  return done
+    ? `${weekday} · Today’s Puzzle done ✓`
+    : `${weekday} · Today’s Puzzle is ready`;
+}
+
+export function homeSeasonLine(profile: Profile, date = new Date()): string {
+  if (profile.seasonal === 'off') return '';
+  const season = getActiveSeason(date);
+  return season ? `${season.name} season` : '';
 }
 
 export function renderHome(
@@ -70,6 +102,8 @@ export function renderHome(
         </button>`
     : '';
 
+  const dayLine = homeDayLine(profile);
+  const seasonLine = homeSeasonLine(profile);
   const expertBadge = expert
     ? `<p class="home-expert-badge">Expert Mode on</p>`
     : '';
@@ -100,9 +134,11 @@ export function renderHome(
       <div class="home-content">
         <div class="home-hero">
           <img class="home-logo" src="./clearnine-logo.png" alt="ClearNine" width="160" height="160" />
-          <h1 class="home-title">ClearNine <span class="home-version">v${APP_VERSION}</span></h1>
+          <h1 class="home-title">ClearNine</h1>
           <div class="home-title-rule" aria-hidden="true"></div>
           <p class="home-sub">Simple. Calm. No ads.</p>
+          <p class="home-dayline">${dayLine}</p>
+          ${seasonLine ? `<p class="home-season">${seasonLine}</p>` : ''}
           ${expertBadge}
         </div>
 
@@ -129,14 +165,9 @@ export function renderHome(
           </button>
         </div>
 
-        <div class="menu-row">
-          <button type="button" class="menu-btn secondary" id="btn-goals">
-            <span class="menu-title">Awards</span>
-          </button>
-          <button type="button" class="menu-btn secondary" id="btn-themes">
-            <span class="menu-title">Colors</span>
-          </button>
-        </div>
+        <button type="button" class="menu-btn secondary" id="btn-goals">
+          <span class="menu-title">Awards</span>
+        </button>
 
         <button type="button" class="menu-btn secondary" id="btn-settings">
           <span class="menu-title">Settings</span>
@@ -156,7 +187,6 @@ export function renderHome(
   root.querySelector('#btn-records')!.addEventListener('click', h.onRecords);
   root.querySelector('#btn-board')!.addEventListener('click', h.onBoard);
   root.querySelector('#btn-goals')!.addEventListener('click', h.onGoals);
-  root.querySelector('#btn-themes')!.addEventListener('click', h.onThemes);
   root.querySelector('#btn-settings')!.addEventListener('click', h.onSettings);
   root.querySelector('#btn-howto')!.addEventListener('click', h.onHowTo);
 }
@@ -409,9 +439,18 @@ export function renderGoals(root: HTMLElement, profile: Profile, h: ScreenHandle
 }
 
 export function renderThemes(root: HTMLElement, profile: Profile, h: ScreenHandlers): void {
+  const season = getActiveSeason(new Date());
+  const seasonOn = !!season && profile.seasonal !== 'off';
+  const seasonCard = season
+    ? `<button type="button" class="theme-card season-card ${seasonOn ? 'active' : ''}" data-season="${season.id}">
+        <span class="theme-swatch" style="background:linear-gradient(135deg,${season.vars['--bg-top']},${season.vars['--accent']})"></span>
+        <span class="theme-name">${seasonRangeLabel(season)}</span>
+        <span class="theme-hint">${seasonOn ? 'Using now' : 'This season'}</span>
+      </button>`
+    : '';
   const cards = THEMES.map((t) => {
     const unlocked = isThemeUnlocked(profile, t.id);
-    const active = profile.themeId === t.id;
+    const active = !seasonOn && profile.themeId === t.id;
     return `
       <button type="button" class="theme-card ${active ? 'active' : ''} ${unlocked ? '' : 'locked'}"
         data-theme="${t.id}" ${unlocked ? '' : 'disabled'}>
@@ -428,12 +467,15 @@ export function renderThemes(root: HTMLElement, profile: Profile, h: ScreenHandl
       </header>
       <h2 class="panel-title">Colors</h2>
       <p class="panel-lead">Pick a look that is easy on your eyes.</p>
-      <div class="panel-body theme-grid">${cards}</div>
+      <div class="panel-body theme-grid">${seasonCard}${cards}</div>
     </div>
   `;
   root.querySelector('#btn-back')!.addEventListener('click', h.onBackHome);
   root.querySelectorAll<HTMLButtonElement>('.theme-card:not([disabled])').forEach((btn) => {
-    btn.addEventListener('click', () => h.onSelectTheme(btn.dataset.theme!));
+    btn.addEventListener('click', () => {
+      if (btn.dataset.season) h.onSelectSeason();
+      else h.onSelectTheme(btn.dataset.theme!);
+    });
   });
 }
 
@@ -444,7 +486,6 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
       <header class="panel-head">
         ${backButton()}
       </header>
-      <p class="settings-thanks" role="note">Special thanks to <strong>RAREBERT</strong> FOR QA TESTING</p>
       <h2 class="panel-title">Settings</h2>
       <p class="panel-lead">Tune sound, feel, and challenge.</p>
       <div class="panel-body settings-list">
@@ -460,6 +501,14 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
           <span class="menu-title">Colors</span>
           <span class="menu-meta">Change theme</span>
         </button>
+        <button type="button" class="menu-btn settings-row" id="btn-toggle-seasonal">
+          <span class="menu-title">Seasonal colors</span>
+          <span class="menu-meta" id="seasonal-state">${profile.seasonal === 'off' ? 'Off' : 'On'}</span>
+        </button>
+        <button type="button" class="menu-btn settings-row" id="btn-toggle-blocks">
+          <span class="menu-title">Block colors</span>
+          <span class="menu-meta" id="blocks-state">${profile.blockStyle === 'varied' ? 'Varied' : 'Single'}</span>
+        </button>
         <button type="button" class="menu-btn settings-row expert-toggle ${profile.expertMode ? 'expert-on' : ''}" id="btn-toggle-expert">
           <span class="menu-title">Expert Mode</span>
           <span class="menu-meta" id="expert-state">${profile.expertMode ? 'On' : 'Off'}</span>
@@ -474,6 +523,10 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
           <span class="menu-title">Check for updates</span>
           <span class="menu-meta">GitHub releases</span>
         </button>
+        <button type="button" class="menu-btn settings-row" id="btn-show-tips">
+          <span class="menu-title">Show tips again</span>
+          <span class="menu-meta">How to play</span>
+        </button>
         <button type="button" class="menu-btn settings-row ${profile.leaderboardOn ? 'expert-on' : ''}" id="btn-toggle-board">
           <span class="menu-title">Join the Leaderboard</span>
           <span class="menu-meta" id="board-state">${profile.leaderboardOn ? 'On' : 'Off'}</span>
@@ -485,6 +538,16 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
             value="${escapeHtml(profile.leaderboardName)}" />
         </label>
         <p class="settings-name-hint">Optional. Play stays on your phone. The leaderboard only gets a name and score if this is On.</p>
+        <p class="settings-backup-label">Backup</p>
+        <button type="button" class="menu-btn settings-row" id="btn-export-backup">
+          <span class="menu-title">Export progress</span>
+          <span class="menu-meta">Save a copy</span>
+        </button>
+        <button type="button" class="menu-btn settings-row" id="btn-import-backup">
+          <span class="menu-title">Import progress</span>
+          <span class="menu-meta">Restore a copy</span>
+        </button>
+        <p class="settings-name-hint">A copy stays on this device. Nothing is uploaded.</p>
         <p class="settings-version">ClearNine v${APP_VERSION}</p>
       </div>
     </div>
@@ -504,7 +567,14 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
     h.onToggleExpert();
   });
   root.querySelector('#btn-open-themes')!.addEventListener('click', h.onThemes);
+  root.querySelector('#btn-toggle-seasonal')!.addEventListener('click', () => {
+    h.onToggleSeasonal();
+  });
+  root.querySelector('#btn-toggle-blocks')!.addEventListener('click', () => {
+    h.onToggleBlockStyle();
+  });
   root.querySelector('#btn-check-update')!.addEventListener('click', h.onCheckUpdate);
+  root.querySelector('#btn-show-tips')!.addEventListener('click', h.onShowTips);
   root.querySelector('#btn-toggle-board')!.addEventListener('click', () => {
     h.onToggleLeaderboard();
     const st = root.querySelector('#board-state');
@@ -515,6 +585,12 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
   const nameInput = root.querySelector<HTMLInputElement>('#board-name');
   nameInput?.addEventListener('change', () => {
     h.onSaveLeaderboardName(nameInput.value);
+  });
+  root.querySelector('#btn-export-backup')!.addEventListener('click', () => {
+    void exportProgress();
+  });
+  root.querySelector('#btn-import-backup')!.addEventListener('click', () => {
+    openImportDialog();
   });
 }
 
@@ -803,4 +879,166 @@ function escapeHtml(s: string): string {
     .replace(/</g, '&lt;')
     .replace(/>/g, '&gt;')
     .replace(/"/g, '&quot;');
+}
+
+function closeBackupDialogs(): void {
+  document.querySelectorAll('.backup-overlay').forEach((el) => el.remove());
+}
+
+function backupFileName(now = new Date()): string {
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `ClearNine-backup-${y}-${m}-${d}.json`;
+}
+
+async function copyBackupText(text: string): Promise<boolean> {
+  try {
+    if (!navigator.clipboard?.writeText) return false;
+    await navigator.clipboard.writeText(text);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Web Share with a File when the WebView supports it. Cancel stays quiet. */
+async function shareBackupFile(text: string): Promise<'shared' | 'cancelled' | 'unavailable'> {
+  if (typeof navigator.share !== 'function') return 'unavailable';
+  try {
+    const file = new File([text], backupFileName(), { type: 'application/json' });
+    const payload: ShareData = { files: [file], title: 'ClearNine backup' };
+    if (typeof navigator.canShare === 'function' && !navigator.canShare(payload)) {
+      return 'unavailable';
+    }
+    await navigator.share(payload);
+    return 'shared';
+  } catch (err) {
+    if (err instanceof DOMException && err.name === 'AbortError') return 'cancelled';
+    return 'unavailable';
+  }
+}
+
+function showBackupCopyDialog(text: string): void {
+  closeBackupDialogs();
+  const wrap = document.createElement('div');
+  wrap.className = 'overlay show confirm-overlay backup-overlay';
+  wrap.innerHTML = `
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="backup-copy-title">
+      <h2 id="backup-copy-title">Copy your backup</h2>
+      <p class="confirm-msg">Press and hold the text to copy it.</p>
+      <textarea class="backup-text" id="backup-copy-text" readonly spellcheck="false" aria-label="Backup text"></textarea>
+      <button type="button" class="primary-btn" id="backup-copy-btn">Copy</button>
+      <button type="button" class="secondary-btn" id="backup-copy-close" data-back>Close</button>
+    </div>`;
+  document.body.appendChild(wrap);
+  const area = wrap.querySelector<HTMLTextAreaElement>('#backup-copy-text')!;
+  area.value = text;
+  const close = () => wrap.remove();
+  wrap.querySelector('#backup-copy-close')!.addEventListener('click', close);
+  wrap.querySelector('#backup-copy-btn')!.addEventListener('click', () => {
+    void (async () => {
+      if (await copyBackupText(text)) {
+        close();
+        showToast('Backup copied. Paste it somewhere safe.');
+        return;
+      }
+      area.focus();
+      area.select();
+      showToast('Press and hold the text to copy.');
+    })();
+  });
+}
+
+async function confirmAndApply(text: string, close: () => void): Promise<void> {
+  const parsed = parseBackup(text);
+  if (!parsed.ok) {
+    showToast(parsed.error);
+    return;
+  }
+  const line = formatBackupSummary(backupSummary(parsed.backup));
+  close();
+  const yes = await askConfirm(`This replaces your current progress on this device. ${line}`);
+  if (!yes) return;
+  const applied = applyBackup(parsed.backup);
+  if (!applied.ok) {
+    showToast(applied.error);
+    return;
+  }
+  showToast('Progress restored.');
+  // Block input until reload so a Settings toggle cannot write the old in-memory
+  // profile over the restored one.
+  const shield = document.createElement('div');
+  shield.setAttribute('aria-hidden', 'true');
+  shield.style.cssText = 'position:fixed;inset:0;z-index:99999;background:transparent;';
+  document.body.appendChild(shield);
+  window.setTimeout(() => window.location.reload(), 700);
+}
+
+async function importFromFile(file: File, close: () => void): Promise<void> {
+  if (file.size > MAX_BACKUP_CHARS) {
+    showToast('That backup is too large.');
+    return;
+  }
+  try {
+    await confirmAndApply(await file.text(), close);
+  } catch {
+    showToast('That backup could not be read.');
+  }
+}
+
+function openImportDialog(): void {
+  closeBackupDialogs();
+  const wrap = document.createElement('div');
+  wrap.className = 'overlay show confirm-overlay backup-overlay';
+  wrap.innerHTML = `
+    <div class="dialog" role="dialog" aria-modal="true" aria-labelledby="backup-import-title">
+      <h2 id="backup-import-title">Import progress</h2>
+      <p class="confirm-msg">Choose a file, or paste the backup text.</p>
+      <button type="button" class="secondary-btn" id="backup-choose">Choose a file</button>
+      <input class="backup-file-input" id="backup-file" type="file" accept=".json,application/json" />
+      <textarea class="backup-text" id="backup-paste" spellcheck="false" autocapitalize="off" autocomplete="off" placeholder="Paste backup here" aria-label="Pasted backup"></textarea>
+      <button type="button" class="primary-btn" id="backup-restore">Restore</button>
+      <button type="button" class="secondary-btn" id="backup-cancel" data-back>Cancel</button>
+    </div>`;
+  document.body.appendChild(wrap);
+  const close = () => wrap.remove();
+  wrap.querySelector('#backup-cancel')!.addEventListener('click', close);
+  const input = wrap.querySelector<HTMLInputElement>('#backup-file')!;
+  wrap.querySelector('#backup-choose')!.addEventListener('click', () => input.click());
+  input.addEventListener('change', () => {
+    const file = input.files?.[0];
+    input.value = '';
+    if (!file) return;
+    void importFromFile(file, close);
+  });
+  const paste = wrap.querySelector<HTMLTextAreaElement>('#backup-paste')!;
+  wrap.querySelector('#backup-restore')!.addEventListener('click', () => {
+    const text = paste.value.trim();
+    if (!text) {
+      showToast('Paste a backup first.');
+      return;
+    }
+    void confirmAndApply(text, close);
+  });
+}
+
+async function exportProgress(): Promise<void> {
+  try {
+    const backup = buildBackup();
+    if (backup.data[BACKUP_PROFILE_KEY] == null) {
+      showToast('Could not read your progress.');
+      return;
+    }
+    const text = serializeBackup(backup);
+    const shared = await shareBackupFile(text);
+    if (shared === 'shared' || shared === 'cancelled') return;
+    if (await copyBackupText(text)) {
+      showToast('Backup copied. Paste it somewhere safe.');
+      return;
+    }
+    showBackupCopyDialog(text);
+  } catch {
+    showToast('Could not export your progress.');
+  }
 }

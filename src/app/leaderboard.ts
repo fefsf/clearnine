@@ -2,9 +2,22 @@ import { APP_VERSION } from './version';
 import type { GameMode } from '../game/stats';
 
 export const LEADERBOARD_URL = 'https://c9.heezynet.com';
+/**
+ * Public speed bump, not a secret. The server ships the same default so
+ * already-installed builds can still post. See server/README.md.
+ */
 export const LEADERBOARD_TOKEN = 'c9hzy_4f8e2a91b0c6d3e7';
 
 const STORAGE_DEVICE = 'clearnine-device-id';
+const ANONYMOUS_DEVICE = 'c9-anonymous';
+let memoryDeviceId: string | null = null;
+
+function newDeviceId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+  return `c9-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 export type BoardTab = 'classic' | 'classic-expert' | 'daily' | 'daily-expert' | 'weekly' | 'blitz';
 
@@ -40,15 +53,13 @@ export function tabToQuery(tab: BoardTab, today: string, week: string): {
 export function deviceId(): string {
   try {
     const existing = localStorage.getItem(STORAGE_DEVICE);
-    if (existing && existing.length >= 8) return existing;
-    const id =
-      typeof crypto !== 'undefined' && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `c9-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+    if (existing && existing.length >= 8 && existing !== ANONYMOUS_DEVICE) return existing;
+    const id = newDeviceId();
     localStorage.setItem(STORAGE_DEVICE, id);
     return id;
   } catch {
-    return 'c9-anonymous';
+    if (!memoryDeviceId) memoryDeviceId = newDeviceId();
+    return memoryDeviceId;
   }
 }
 

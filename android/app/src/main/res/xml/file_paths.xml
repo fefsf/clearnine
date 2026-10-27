@@ -1,6 +1,11 @@
 <?xml version="1.0" encoding="utf-8"?>
 <paths xmlns:android="http://schemas.android.com/apk/res/android">
-    <external-path name="my_images" path="." />
+    <!--
+      ApkInstallerPlugin writes ClearNine-update.apk under
+      Context.getExternalFilesDir(DIRECTORY_DOWNLOADS):
+      Android/data/<package>/files/Download/.
+      external-files-path is rooted at getExternalFilesDir(null).
+      path "Download/" is only that folder — not all of external storage.
+    -->
     <external-files-path name="apk_updates" path="Download/" />
-    <cache-path name="my_cache_images" path="." />
 </paths>

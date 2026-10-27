@@ -5,6 +5,9 @@ const RELEASES_URL = 'https://api.github.com/repos/fefsf/clearnine/releases/late
 const SNOOZE_MS = 24 * 60 * 60 * 1000;
 const STORAGE_SKIPPED = 'clearnine-update-skipped';
 const STORAGE_SNOOZE = 'clearnine-update-snooze';
+/** Written after a successful GitHub check. Automatic checks honor a 24h gap. */
+const STORAGE_LAST_CHECK = 'clearnine-update-last-check';
+const CHECK_BACKOFF_MS = 24 * 60 * 60 * 1000;
 
 export type UpdateInfo = {
   version: string;
@@ -51,6 +54,30 @@ export function skipVersion(version: string): void {
 /** Don’t auto-prompt this version again until the snooze window ends. */
 export function snoozeVersion(version: string): void {
   writeLocal(STORAGE_SNOOZE, JSON.stringify({ version, at: Date.now() }));
+}
+
+function lastUpdateCheckAt(): number | null {
+  try {
+    const raw = localStorage.getItem(STORAGE_LAST_CHECK);
+    if (!raw) return null;
+    const n = Number(raw);
+    if (!Number.isFinite(n) || n <= 0) return null;
+    return n;
+  } catch {
+    return null;
+  }
+}
+
+/** True when an automatic check should wait. A future/garbage stamp does not block. */
+function inUpdateBackoff(now: number = Date.now()): boolean {
+  const last = lastUpdateCheckAt();
+  if (last == null) return false;
+  const elapsed = now - last;
+  return elapsed >= 0 && elapsed < CHECK_BACKOFF_MS;
+}
+
+function markUpdateChecked(now: number = Date.now()): void {
+  writeLocal(STORAGE_LAST_CHECK, String(now));
 }
 
 export function isSnoozed(version: string, now: number = Date.now()): boolean {
@@ -115,12 +142,18 @@ export async function checkForUpdate(opts?: {
   const respectSkip = opts?.respectSkip ?? true;
   const local = opts?.installedVersion?.trim() || APP_VERSION;
 
+  // Settings passes force and must ignore the 24h launch backoff.
+  if (!force && inUpdateBackoff()) {
+    return { status: 'up-to-date' };
+  }
+
   if (!navigator.onLine) {
     return { status: 'offline' };
   }
 
   try {
     const info = await fetchLatestRelease();
+    markUpdateChecked();
     if (!info || !isNewerVersion(info.version, local)) {
       return { status: 'up-to-date' };
     }

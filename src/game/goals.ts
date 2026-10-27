@@ -12,26 +12,43 @@ export type GoalDef = {
   check: (p: Profile) => boolean;
 };
 
+/** Highest finished score in classic, daily, weekly, or blitz (calm or Expert). */
+function bestPlayScore(profile: Profile): number {
+  const scores = [
+    profile.bestClassic,
+    profile.bestClassicExpert,
+    profile.bestBlitz,
+    ...Object.values(profile.bestDaily ?? {}),
+    ...Object.values(profile.bestDailyExpert ?? {}),
+    ...Object.values(profile.bestWeekly ?? {}),
+  ];
+  let best = 0;
+  for (const score of scores) {
+    if (typeof score === 'number' && score > best) best = score;
+  }
+  return best;
+}
+
 export const GOALS: GoalDef[] = [
   {
     id: 'score_500',
     title: 'Getting started',
     description: 'Score 500 in Play (any mode)',
     unlocksTheme: 'sunset',
-    check: (p) => p.bestClassic >= 500 || p.bestClassicExpert >= 500,
+    check: (p) => bestPlayScore(p) >= 500,
   },
   {
     id: 'score_2000',
     title: 'Sharp eye',
     description: 'Score 2,000 in Play (any mode)',
-    check: (p) => p.bestClassic >= 2000 || p.bestClassicExpert >= 2000,
+    check: (p) => bestPlayScore(p) >= 2000,
   },
   {
     id: 'score_5000',
     title: 'Block master',
     description: 'Score 5,000 in Play (any mode)',
     unlocksTheme: 'midnight',
-    check: (p) => p.bestClassic >= 5000 || p.bestClassicExpert >= 5000,
+    check: (p) => bestPlayScore(p) >= 5000,
   },
   {
     id: 'combo_3',
@@ -97,8 +114,8 @@ export const GOALS: GoalDef[] = [
   {
     id: 'score_8000',
     title: 'Untouchable',
-    description: 'Score 8,000 in Classic (or Expert Play)',
-    check: (p) => p.bestClassic >= 8000 || p.bestClassicExpert >= 8000,
+    description: 'Score 8,000 in Play (any mode)',
+    check: (p) => bestPlayScore(p) >= 8000,
   },
   {
     id: 'combo_5',

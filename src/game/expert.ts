@@ -1,3 +1,5 @@
+import { hashString } from './rng';
+
 /** Expert Mode: optional hard rules for high-skill players. Off = original ClearNine. */
 
 export const EXPERT_BLURB =
@@ -101,17 +103,9 @@ export const WEEKLY_MANDATES: readonly WeeklyMandate[] = [
   },
 ] as const;
 
-function hashWeek(week: string): number {
-  let h = 2166136261;
-  for (let i = 0; i < week.length; i++) {
-    h ^= week.charCodeAt(i);
-    h = Math.imul(h, 16777619);
-  }
-  return h >>> 0;
-}
-
 /** Stable mandate for the given ISO week — same for every player. */
 export function getWeeklyMandate(week = weekKey()): WeeklyMandate {
-  const idx = hashWeek(week) % WEEKLY_MANDATES.length;
+  // Same FNV-1a as the old private hashWeek (via hashString) so existing weeks stay put.
+  const idx = hashString(week) % WEEKLY_MANDATES.length;
   return WEEKLY_MANDATES[idx]!;
 }

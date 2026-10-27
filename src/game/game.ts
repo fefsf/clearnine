@@ -25,7 +25,11 @@ import {
   type RngState,
 } from './rng';
 import { scorePlacement, type ScoreBreakdown } from './scoring';
-import type { GameMode } from './stats';
+import {
+  discardPendingFinalize,
+  stagePendingFinalize,
+  type GameMode,
+} from './stats';
 import { writeLocal } from '../app/storage';
 
 export type TraySlot = PieceDef | null;
@@ -235,8 +239,13 @@ export class Game {
     this.score = saved.score;
     this.streak = saved.streak;
     this.gameOver = saved.gameOver;
-    this.undosLeft = saved.undosLeft;
-    this.undoStack = saved.undoStack ?? [];
+    const restoredUndo = Array.isArray(saved.undoStack) ? saved.undoStack : [];
+    this.undoStack = restoredUndo;
+    // Frames are not stored (see writePersist), so Undo stays disabled until the
+    // first move after Continue pushes a frame. The budget itself is kept so
+    // moves made after resuming can still be undone.
+    const budget = typeof saved.undosLeft === 'number' ? saved.undosLeft : 0;
+    this.undosLeft = Math.max(0, Math.min(budget, maxUndos(this.mode, this.weeklyMandate())));
     this.rng = cloneRng(saved.rng);
     this.clearsThisGame = saved.clearsThisGame ?? 0;
     this.expert = saved.expert ?? false;
@@ -383,6 +392,7 @@ export class Game {
     | { ok: true; placement: UndoFrame['placement'] | null }
     | { ok: false } {
     if (!this.canUndo()) return { ok: false };
+    const cancellingFinish = this.gameOver;
     const frame = this.undoStack.pop()!;
     this.board = cloneBoard(frame.board);
     this.tray = frame.tray.map((p) => clonePiece(p));
@@ -398,6 +408,10 @@ export class Game {
       if (!this.hold || !pieceFitsHold(this.board, this.hold)) {
         this.gameOver = true;
       }
+    }
+    if (cancellingFinish && !this.gameOver) {
+      // The ending move was staged for credit. Undoing it means the run is still going.
+      discardPendingFinalize(this.mode, this.expert);
     }
     this.persist();
     return {
@@ -460,7 +474,20 @@ export class Game {
 
   private writePersist(): void {
     if (this.gameOver) {
+      // The overlay can still undo, so the UI waits to call recordGameFinished.
+      // Stage the result now; undo drops it, and the next load commits it if
+      // the process dies first. The continue-save stays cleared either way.
+      // Clear the continue-save first so a crash cannot leave a resumable board
+      // for a run that was already staged as finished.
       clearSave(this.mode, this.expert);
+      stagePendingFinalize({
+        mode: this.mode,
+        expert: this.expert,
+        score: this.score,
+        cleared: this.clearsThisGame,
+        date: this.dailyDate,
+        week: this.mode === 'weekly' ? this.weekId : undefined,
+      });
       return;
     }
     const save: GameSave = {
@@ -471,11 +498,12 @@ export class Game {
       score: this.score,
       streak: this.streak,
       gameOver: false,
-      undosLeft: this.undosLeft,
       rng: { seed: this.rng.seed, counter: this.rng.counter },
       clearsThisGame: this.clearsThisGame,
       expert: this.expert,
       // Undo frames stay in memory. Writing them made every move a large save.
+      // The budget is kept; Undo re-enables once the first post-Continue move pushes a frame.
+      undosLeft: this.undosLeft,
       undoStack: [],
     };
     if (this.mode === 'daily') save.dailyDate = this.dailyDate;
@@ -585,9 +613,4 @@ export function findContinueFor(mode: GameMode, expert: boolean): ContinueGame |
     return { mode, score: saved.score, expert };
   }
   return null;
-}
-
-/** Exported for debug / tests: whether a save counts as Continue. */
-export function isSaveContinuable(saved: GameSave | null): boolean {
-  return saveIsContinuable(saved);
 }

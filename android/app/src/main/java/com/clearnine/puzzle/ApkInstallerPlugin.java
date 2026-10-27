@@ -62,6 +62,10 @@ public class ApkInstallerPlugin extends Plugin {
             call.reject("Must provide a URL");
             return;
         }
+        if (!isAllowedUrl(url)) {
+            call.reject("URL host is not allowed");
+            return;
+        }
         try {
             Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
             intent.addCategory(Intent.CATEGORY_BROWSABLE);
@@ -364,6 +368,7 @@ public class ApkInstallerPlugin extends Plugin {
         }
     }
 
+    /** HTTPS GitHub hosts only. Shared by openUrl and APK downloads (including redirects). */
     private static boolean isAllowedUrl(String url) {
         Uri uri = Uri.parse(url);
         if (uri == null || uri.getScheme() == null || uri.getHost() == null) {

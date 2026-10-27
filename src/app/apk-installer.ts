@@ -18,7 +18,26 @@ export interface ApkInstallerPlugin {
   ): Promise<PluginListenerHandle>;
 }
 
-const ApkInstaller = registerPlugin<ApkInstallerPlugin>('ApkInstaller', {
+/**
+ * HTTPS GitHub hosts only. Keep in sync with ApkInstallerPlugin.isAllowedUrl.
+ * Release pages are github.com; APK redirects use githubusercontent or GitHub's S3 bucket.
+ */
+export function isGithubUpdateUrl(raw: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(raw);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:') return false;
+  const host = url.hostname.toLowerCase();
+  if (host === 'github.com' || host.endsWith('.github.com')) return true;
+  if (host === 'objects.githubusercontent.com' || host.endsWith('.githubusercontent.com')) return true;
+  if (host === 'github-cloud.s3.amazonaws.com') return true;
+  return host.endsWith('.amazonaws.com') && host.includes('github-production-release-asset');
+}
+
+const ApkInstallerRaw = registerPlugin<ApkInstallerPlugin>('ApkInstaller', {
   web: {
     async downloadAndInstall(options: { url: string }): Promise<ApkInstallResult> {
       window.open(options.url, '_blank', 'noopener');
@@ -34,4 +53,22 @@ const ApkInstaller = registerPlugin<ApkInstallerPlugin>('ApkInstaller', {
   },
 });
 
-export { ApkInstaller };
+export const ApkInstaller: ApkInstallerPlugin = {
+  downloadAndInstall(options) {
+    if (!isGithubUpdateUrl(options.url)) {
+      return Promise.resolve({ status: 'failed', message: 'Update URL is not from GitHub' });
+    }
+    return ApkInstallerRaw.downloadAndInstall(options);
+  },
+  cancelDownload() {
+    return ApkInstallerRaw.cancelDownload();
+  },
+  openUrl(options) {
+    // Resolve instead of rejecting so callers do not fall back to window.open.
+    if (!isGithubUpdateUrl(options.url)) return Promise.resolve();
+    return ApkInstallerRaw.openUrl(options);
+  },
+  addListener(eventName, listenerFunc) {
+    return ApkInstallerRaw.addListener(eventName, listenerFunc);
+  },
+};

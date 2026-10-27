@@ -1,0 +1,7 @@
+/* Bundled so launch does not call fonts.googleapis.com.
+   Atkinson Hyperlegible ships 400 and 700; UI 600/800 synthesize from those.
+   Fraunces is used at 700 (titles) and 800 (celebrate banner). */
+@import "@fontsource/atkinson-hyperlegible/latin-400.css";
+@import "@fontsource/atkinson-hyperlegible/latin-700.css";
+@import "@fontsource/fraunces/latin-700.css";
+@import "@fontsource/fraunces/latin-800.css";
