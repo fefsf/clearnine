@@ -346,7 +346,7 @@ body {
 }
 
 .cell.ghost-ok {
-  /* Plus mark + dashed ring: valid drop without relying on hue. */
+  /* Plus mark: valid drop without relying on hue. */
   background-image:
     linear-gradient(color-mix(in srgb, var(--text) 78%, white), color-mix(in srgb, var(--text) 78%, white)),
     linear-gradient(color-mix(in srgb, var(--text) 78%, white), color-mix(in srgb, var(--text) 78%, white)),
@@ -354,8 +354,6 @@ body {
   background-size: 46% 3px, 3px 46%, auto;
   background-position: center, center, center;
   background-repeat: no-repeat, no-repeat, no-repeat;
-  outline: 3px dashed color-mix(in srgb, var(--text) 70%, var(--accent));
-  outline-offset: -4px;
   box-shadow:
     inset 0 0 0 2px color-mix(in srgb, var(--text) 28%, transparent),
     inset 0 2px 0 color-mix(in srgb, white 45%, transparent),
@@ -372,7 +370,6 @@ body {
   from { opacity: 0.72; }
   to { opacity: 1; }
 }
-
 .cell.chalk::before {
   content: '';
   position: absolute;
@@ -723,8 +720,6 @@ body {
 
 .drag-ghost.ghost-valid {
   opacity: 0.88;
-  outline: 3px dashed color-mix(in srgb, var(--text) 80%, white);
-  outline-offset: 3px;
   filter:
     drop-shadow(0 12px 18px rgba(0, 0, 0, 0.32))
     drop-shadow(0 0 10px color-mix(in srgb, var(--accent) 35%, transparent));
