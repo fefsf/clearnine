@@ -5,9 +5,9 @@ const RELEASES_URL = 'https://api.github.com/repos/fefsf/clearnine/releases/late
 const SNOOZE_MS = 24 * 60 * 60 * 1000;
 const STORAGE_SKIPPED = 'clearnine-update-skipped';
 const STORAGE_SNOOZE = 'clearnine-update-snooze';
-/** Written after a successful GitHub check. Automatic checks honor a 24h gap. */
+/** Written after a successful GitHub check. Only a known newer release is held back by the gap. */
 const STORAGE_LAST_CHECK = 'clearnine-update-last-check';
-/** Short on purpose: a 24h gap hid brand-new releases from the launch prompt. */
+/** Gap before re-asking GitHub while a newer release is already known. */
 const CHECK_BACKOFF_MS = 60 * 60 * 1000;
 /** App version that wrote the last-check stamp; a new install re-checks right away. */
 const STORAGE_LAST_CHECK_VERSION = 'clearnine-update-last-check-version';
@@ -174,13 +174,13 @@ export async function checkForUpdate(opts?: {
   const respectSkip = opts?.respectSkip ?? true;
   const local = opts?.installedVersion?.trim() || APP_VERSION;
 
-  // Settings passes force and must ignore the launch backoff. During backoff we
-  // skip the network but still evaluate the release we already know about, so a
-  // manual check followed by a relaunch still prompts.
-  const backoff = !force && inUpdateBackoff();
-  if (backoff && !readCachedInfo()) {
-    return { status: 'up-to-date' };
-  }
+  // Settings passes force and must ignore the launch backoff. The backoff only
+  // applies while we already know about a newer release (so "Later" and relaunch
+  // still prompt without a request). A cached "no update" never blocks: a release
+  // published after the last check must show on the very next launch.
+  const cached = readCachedInfo();
+  const backoff =
+    !force && inUpdateBackoff() && cached != null && isNewerVersion(cached.version, local);
 
   if (!backoff && !navigator.onLine) {
     return { status: 'offline' };

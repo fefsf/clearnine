@@ -36,12 +36,23 @@ describe('checkForUpdate', () => {
     );
   }
 
-  it('does not hit GitHub when the last automatic check was recent', async () => {
+  it('still checks GitHub on launch when the last check found no update', async () => {
+    stubRelease('0.0.1');
+    const first = await checkForUpdate({ force: false });
+    expect(first.status).toBe('up-to-date');
+
+    stubRelease('99.0.0');
+    const second = await checkForUpdate({ force: false });
+    expect(second.status).toBe('update');
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it('checks GitHub when a recent check left no cached release', async () => {
     localStorage.setItem('clearnine-update-last-check', String(Date.now()));
     stubRelease('99.0.0');
     const result = await checkForUpdate({ force: false });
-    expect(result.status).toBe('up-to-date');
-    expect(fetch).not.toHaveBeenCalled();
+    expect(result.status).toBe('update');
+    expect(fetch).toHaveBeenCalled();
   });
 
   it('skips the network during backoff but still prompts for a known newer release', async () => {
@@ -69,10 +80,8 @@ describe('checkForUpdate', () => {
   it('does not nag about a cached release that is no longer newer', async () => {
     stubRelease('99.0.0');
     await checkForUpdate({ force: false });
-    vi.mocked(fetch).mockClear();
     const result = await checkForUpdate({ force: false, installedVersion: '99.0.0' });
     expect(result.status).toBe('up-to-date');
-    expect(fetch).not.toHaveBeenCalled();
   });
 
   it('lets Settings force a check during the backoff window', async () => {
