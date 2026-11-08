@@ -577,6 +577,7 @@ function mountPlayUi(mode: GameMode): void {
 }
 
 function teardownPlayLayout(): void {
+  stopScoreAnim();
   if (clearAnimTimer) {
     clearTimeout(clearAnimTimer);
     clearAnimTimer = null;
@@ -1015,8 +1016,28 @@ function paintHold(): void {
   holdSlotBtn.classList.toggle('no-fit', !pieceFitsAnywhere(game.board, game.hold));
 }
 
-function animateScoreTo(target: number): void {
+/** Bumped on every cancel so a stale frame callback can never write an old total. */
+let scoreAnimGen = 0;
+let scoreAnimFallback: ReturnType<typeof setTimeout> | null = null;
+
+function stopScoreAnim(): void {
+  scoreAnimGen += 1;
   if (scoreAnim) cancelAnimationFrame(scoreAnim);
+  scoreAnim = null;
+  if (scoreAnimFallback) clearTimeout(scoreAnimFallback);
+  scoreAnimFallback = null;
+}
+
+function snapScore(): void {
+  stopScoreAnim();
+  if (game.mode === 'puzzle' || !scoreEl) return;
+  displayedScore = game.score;
+  scoreEl.textContent = String(game.score);
+}
+
+function animateScoreTo(target: number): void {
+  stopScoreAnim();
+  const gen = scoreAnimGen;
   const start = displayedScore;
   const delta = target - start;
   if (delta === 0) {
@@ -1025,27 +1046,36 @@ function animateScoreTo(target: number): void {
   }
   const t0 = performance.now();
   const dur = Math.min(520, 180 + Math.abs(delta) * 2);
+  const finish = () => {
+    if (gen !== scoreAnimGen) return;
+    stopScoreAnim();
+    displayedScore = target;
+    scoreEl.textContent = String(target);
+    scoreEl.classList.remove('score-pulse');
+    void scoreEl.offsetWidth;
+    scoreEl.classList.add('score-pulse');
+  };
   const step = (now: number) => {
-    const t = Math.min(1, (now - t0) / dur);
+    if (gen !== scoreAnimGen) return;
+    const t = Math.min(1, Math.max(0, (now - t0) / dur));
+    if (t >= 1) {
+      finish();
+      return;
+    }
     const eased = 1 - (1 - t) * (1 - t);
     displayedScore = Math.round(start + delta * eased);
     scoreEl.textContent = String(displayedScore);
-    if (t < 1) scoreAnim = requestAnimationFrame(step);
-    else {
-      displayedScore = target;
-      scoreEl.textContent = String(target);
-      scoreEl.classList.remove('score-pulse');
-      void scoreEl.offsetWidth;
-      scoreEl.classList.add('score-pulse');
-      scoreAnim = null;
-    }
+    scoreAnim = requestAnimationFrame(step);
   };
   scoreAnim = requestAnimationFrame(step);
+  // Android WebViews can stall or drop animation frames; the total must still land.
+  scoreAnimFallback = setTimeout(finish, dur + 150);
 }
 
-function updateHud(snapScore = false): void {
+function updateHud(snap = false): void {
   const puzzleMode = game.mode === 'puzzle';
   if (puzzleMode) {
+    stopScoreAnim();
     const puzzle = getPuzzle(game.puzzleId ?? '');
     scoreLabel.textContent = 'Objective';
     scoreEl.classList.add('score-objective');
@@ -1061,11 +1091,10 @@ function updateHud(snapScore = false): void {
       : '';
     displayedScore = 0;
     beatTargetEl.hidden = true;
-  } else if (snapScore) {
+  } else if (snap) {
     scoreEl.classList.remove('score-objective');
     scoreLabel.textContent = 'Your score';
-    displayedScore = game.score;
-    scoreEl.textContent = String(game.score);
+    snapScore();
   } else {
     scoreEl.classList.remove('score-objective');
     scoreLabel.textContent = 'Your score';
@@ -1329,6 +1358,10 @@ function startFresh(): void {
   gameOverFinalized = false;
   sfx.resetPhrase();
   selectedTrayForHold = null;
+  if (clearAnimTimer) {
+    clearTimeout(clearAnimTimer);
+    clearAnimTimer = null;
+  }
   game.newGame();
   displayedScore = 0;
   paintBoard();
@@ -2069,6 +2102,12 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
   }
 
   selectedTrayForHold = null;
+  // The previous move's clear timer would repaint its stale tray and game-over state.
+  if (clearAnimTimer) {
+    clearTimeout(clearAnimTimer);
+    clearAnimTimer = null;
+    for (const cell of cells) cell.style.animationDelay = '';
+  }
   if (game.mode !== 'puzzle') {
     recordPlacement(profile, {
       combo: result.score.comboMultiplier,
@@ -2090,7 +2129,6 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
   updateHud();
 
   if (result.clears.clearCount > 0) {
-    playClearSweeps(result.clears);
     const delays = clearCascadeDelays(result.clears.cells);
     let maxDelay = 0;
     for (const { r, c } of result.clears.cells) {
@@ -2100,22 +2138,10 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
       cell.classList.add('flash-clear', 'clearing');
       cell.style.animationDelay = `${delay}ms`;
     }
-    spawnClearSparks(
-      result.clears.cells,
-      result.clears.clearCount,
-      result.score.comboMultiplier,
-    );
-    const comboBits = confettiBitsForCombo(result.score.comboMultiplier);
-    if (comboBits > 0) spawnConfetti(comboBits);
-    sfx.clear(result.score.comboMultiplier, result.score.streak);
-    hapticClear(result.score.comboMultiplier);
-    if (result.score.comboMultiplier >= 2) sfx.whoosh();
-    flashBanners(result.score.comboMultiplier, result.score.streak, true, result.score.allClear);
-    celebrateDailyGoal(result.goalJustMet);
-    showScorePop(result.score.total, x, y);
 
+    // Scheduled before the effects so a failing effect cannot skip the repaint,
+    // the final score, or the game-over check.
     const sessionAtClear = playSessionId;
-    if (clearAnimTimer) clearTimeout(clearAnimTimer);
     clearAnimTimer = setTimeout(() => {
       clearAnimTimer = null;
       if (sessionAtClear !== playSessionId) return;
@@ -2131,6 +2157,25 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
       else if (result.gameOver && game.gameOver) showGameOver();
       else resetHintTimer();
     }, 420 + maxDelay);
+
+    try {
+      playClearSweeps(result.clears);
+      spawnClearSparks(
+        result.clears.cells,
+        result.clears.clearCount,
+        result.score.comboMultiplier,
+      );
+      const comboBits = confettiBitsForCombo(result.score.comboMultiplier);
+      if (comboBits > 0) spawnConfetti(comboBits);
+      sfx.clear(result.score.comboMultiplier, result.score.streak);
+      hapticClear(result.score.comboMultiplier);
+      if (result.score.comboMultiplier >= 2) sfx.whoosh();
+      flashBanners(result.score.comboMultiplier, result.score.streak, true, result.score.allClear);
+      celebrateDailyGoal(result.goalJustMet);
+      showScorePop(result.score.total, x, y);
+    } catch {
+      /* effects are cosmetic */
+    }
   } else {
     syncBoardWeather(0, 0, false);
     celebrateDailyGoal(result.goalJustMet);
@@ -2328,10 +2373,14 @@ function boot(): void {
   if (Capacitor.isNativePlatform()) {
     void App.addListener('appStateChange', ({ isActive }) => {
       if (!isActive) return;
+      if (appView === 'play') snapScore();
       refreshSeasonalLook();
       void restartIfApkNewerThanBundle();
     });
   }
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && appView === 'play') snapScore();
+  });
   showSplash(() => {
     showHome();
     void (async () => {

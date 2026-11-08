@@ -1,2 +1,2 @@
 /** Keep in sync with android/app/build.gradle versionName. */
-export const APP_VERSION = '1.14.3';
+export const APP_VERSION = '1.14.4';

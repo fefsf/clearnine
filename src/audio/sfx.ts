@@ -12,7 +12,11 @@ export class Sfx {
 
   private ensure(): AudioContext | null {
     if (this.muted) return null;
-    return audioContext();
+    try {
+      return audioContext();
+    } catch {
+      return null;
+    }
   }
 
   toggleMute(): boolean {
@@ -118,66 +122,79 @@ export class Sfx {
   ): void {
     const ctx = this.ensure();
     if (!ctx) return;
-    const t0 = ctx.currentTime + delay;
-    const osc = ctx.createOscillator();
-    const filter = ctx.createBiquadFilter();
-    const g = ctx.createGain();
-    osc.type = 'triangle';
-    osc.frequency.setValueAtTime(freq, t0);
-    osc.frequency.exponentialRampToValueAtTime(Math.max(80, freq * drop), t0 + duration);
-    filter.type = 'lowpass';
-    filter.frequency.setValueAtTime(Math.min(4200, freq * 4), t0);
-    g.gain.setValueAtTime(0.0001, t0);
-    g.gain.exponentialRampToValueAtTime(gain, t0 + 0.012);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
-    osc.connect(filter);
-    filter.connect(g);
-    g.connect(ctx.destination);
-    osc.start(t0);
-    osc.stop(t0 + duration + 0.02);
+    // Phone WebViews can throw from a broken or closed context. Sound must never break a move.
+    try {
+      const t0 = ctx.currentTime + delay;
+      const osc = ctx.createOscillator();
+      const filter = ctx.createBiquadFilter();
+      const g = ctx.createGain();
+      osc.type = 'triangle';
+      osc.frequency.setValueAtTime(freq, t0);
+      osc.frequency.exponentialRampToValueAtTime(Math.max(80, freq * drop), t0 + duration);
+      filter.type = 'lowpass';
+      filter.frequency.setValueAtTime(Math.min(4200, freq * 4), t0);
+      g.gain.setValueAtTime(0.0001, t0);
+      g.gain.exponentialRampToValueAtTime(gain, t0 + 0.012);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+      osc.connect(filter);
+      filter.connect(g);
+      g.connect(ctx.destination);
+      osc.start(t0);
+      osc.stop(t0 + duration + 0.02);
+    } catch {
+      /* silent */
+    }
   }
 
   private thock(freq: number, duration: number, gain: number): void {
     const ctx = this.ensure();
     if (!ctx) return;
-    const src = ctx.createBufferSource();
-    src.buffer = this.noiseBuffer(ctx);
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.frequency.setValueAtTime(Math.max(240, freq), ctx.currentTime);
-    filter.Q.value = 0.7;
-    const g = ctx.createGain();
-    const t = ctx.currentTime;
-    g.gain.setValueAtTime(gain, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
-    src.connect(filter);
-    filter.connect(g);
-    g.connect(ctx.destination);
-    src.start(t);
-    src.stop(t + duration);
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer(ctx);
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.frequency.setValueAtTime(Math.max(240, freq), ctx.currentTime);
+      filter.Q.value = 0.7;
+      const g = ctx.createGain();
+      const t = ctx.currentTime;
+      g.gain.setValueAtTime(gain, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+      src.connect(filter);
+      filter.connect(g);
+      g.connect(ctx.destination);
+      src.start(t);
+      src.stop(t + duration);
+    } catch {
+      /* silent */
+    }
   }
 
   private sweep(duration: number, gain: number): void {
     const ctx = this.ensure();
     if (!ctx) return;
-    const src = ctx.createBufferSource();
-    src.buffer = this.noiseBuffer(ctx);
-    src.playbackRate.value = 1.4;
-    const filter = ctx.createBiquadFilter();
-    filter.type = 'bandpass';
-    filter.Q.value = 0.8;
-    const t = ctx.currentTime;
-    filter.frequency.setValueAtTime(400, t);
-    filter.frequency.exponentialRampToValueAtTime(2400, t + duration);
-    const g = ctx.createGain();
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.exponentialRampToValueAtTime(gain, t + 0.03);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
-    src.connect(filter);
-    filter.connect(g);
-    g.connect(ctx.destination);
-    src.start(t);
-    src.stop(t + duration);
+    try {
+      const src = ctx.createBufferSource();
+      src.buffer = this.noiseBuffer(ctx);
+      src.playbackRate.value = 1.4;
+      const filter = ctx.createBiquadFilter();
+      filter.type = 'bandpass';
+      filter.Q.value = 0.8;
+      const t = ctx.currentTime;
+      filter.frequency.setValueAtTime(400, t);
+      filter.frequency.exponentialRampToValueAtTime(2400, t + duration);
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(gain, t + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + duration);
+      src.connect(filter);
+      filter.connect(g);
+      g.connect(ctx.destination);
+      src.start(t);
+      src.stop(t + duration);
+    } catch {
+      /* silent */
+    }
   }
 
   private noiseBuffer(ctx: AudioContext): AudioBuffer {
