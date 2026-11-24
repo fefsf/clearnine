@@ -207,6 +207,8 @@ function isMode(value: unknown): value is GameMode {
   );
 }
 
+const DAILY_DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
+
 const PUZZLE_SOLVE_ID = /^[a-z0-9_-]{1,32}$/;
 
 /** Drop unknown ids and non-integer move counts. Older profiles have no map. */
@@ -250,7 +252,8 @@ function migrateRecent(value: unknown): RecentGame[] {
     const score = wholeOrNull(item.score);
     const cleared = wholeOrNull(item.cleared);
     if (score == null || cleared == null) continue;
-    if (typeof item.date !== 'string' || item.date.trim().length === 0 || item.date.length > 32) continue;
+    // Dates are shown on My Scores. Only the shape the app writes is kept.
+    if (typeof item.date !== 'string' || !DAILY_DATE_KEY.test(item.date.trim())) continue;
     const game: RecentGame = {
       mode: item.mode,
       score,
@@ -369,8 +372,6 @@ export function dailyPlayStreak(profile: Profile, today = todayKey()): number {
   return streak;
 }
 
-const DAILY_DATE_KEY = /^\d{4}-\d{2}-\d{2}$/;
-
 function isDailyDateKey(key: string): boolean {
   if (!DAILY_DATE_KEY.test(key)) return false;
   const year = Number(key.slice(0, 4));
@@ -411,6 +412,9 @@ type PlacementSnap = {
   maxCombo: number;
   maxStreak: number;
   unlockedGoals: string[];
+  /** Daily lists before the move, so undoing the move that met the goal takes it back. */
+  dailyGoalsMet: string[];
+  dailyDates: string[];
 };
 
 /**
@@ -443,6 +447,8 @@ export function recordPlacement(
     maxCombo: profile.stats.maxCombo,
     maxStreak: profile.stats.maxStreak,
     unlockedGoals: profile.unlockedGoals.slice(),
+    dailyGoalsMet: (profile.stats.dailyGoalsMet ?? []).slice(),
+    dailyDates: profile.stats.dailyDates.slice(),
   });
   profile.stats.piecesPlaced += 1;
   profile.stats.linesCleared += opts.clearCount;
@@ -473,6 +479,29 @@ export function reversePlacement(
   profile.stats.maxCombo = snap.maxCombo;
   profile.stats.maxStreak = snap.maxStreak;
   profile.unlockedGoals = snap.unlockedGoals.slice();
+  profile.stats.dailyGoalsMet = snap.dailyGoalsMet.slice();
+  profile.stats.dailyDates = snap.dailyDates.slice();
+}
+
+/**
+ * Record a met Today’s Puzzle goal straight away, so leaving the run before
+ * the board fills still counts the goal and the day. Returns true if anything changed.
+ */
+export function bankDailyGoal(profile: Profile, date: string): boolean {
+  if (!isDailyDateKey(date)) return false;
+  let changed = false;
+  if (!Array.isArray(profile.stats.dailyGoalsMet)) profile.stats.dailyGoalsMet = [];
+  if (!profile.stats.dailyGoalsMet.includes(date)) {
+    profile.stats.dailyGoalsMet.push(date);
+    profile.stats.dailyGoalsMet.sort();
+    changed = true;
+  }
+  if (!profile.stats.dailyDates.includes(date)) {
+    profile.stats.dailyDates.push(date);
+    profile.stats.dailyDates.sort();
+    changed = true;
+  }
+  return changed;
 }
 
 const PENDING_KEY = 'clearnine-pending-finalize';

@@ -1,6 +1,7 @@
 package com.clearnine.puzzle;
 
 import android.content.Intent;
+import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.ResolveInfo;
 import android.net.Uri;
@@ -28,7 +29,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Downloads an APK in-process (not DownloadManager / Custom Tabs) and opens the installer.
@@ -50,10 +51,20 @@ public class ApkInstallerPlugin extends Plugin {
     private static final int READ_TIMEOUT_MS = 30_000;
     private static final long TIMEOUT_MS = 180_000;
     private static final int BUF_SIZE = 16 * 1024;
+    /** Far above any real ClearNine APK. Stops a wrong or hostile asset from filling storage. */
+    private static final long MAX_APK_BYTES = 150L * 1024 * 1024;
+    /** Updates are only ever fetched from the release assets of this project. */
+    private static final String RELEASE_ASSET_PREFIX = "https://github.com/fefsf/clearnine/releases/download/";
 
     private final ExecutorService io = Executors.newSingleThreadExecutor();
-    private final AtomicBoolean cancelRequested = new AtomicBoolean(false);
+    /** Each download gets a number; cancel marks every download up to the newest as cancelled. */
+    private final AtomicInteger jobSeq = new AtomicInteger(0);
+    private volatile int cancelledThrough = 0;
     private volatile HttpURLConnection currentConn;
+
+    private boolean isCancelled(int job) {
+        return job <= cancelledThrough;
+    }
 
     @PluginMethod
     public void openUrl(PluginCall call) {
@@ -80,7 +91,7 @@ public class ApkInstallerPlugin extends Plugin {
 
     @PluginMethod
     public void cancelDownload(PluginCall call) {
-        cancelRequested.set(true);
+        cancelledThrough = jobSeq.get();
         HttpURLConnection conn = currentConn;
         if (conn != null) {
             try {
@@ -97,8 +108,8 @@ public class ApkInstallerPlugin extends Plugin {
             resolveFailed(call, "Missing download URL");
             return;
         }
-        if (!isAllowedUrl(url)) {
-            resolveFailed(call, "Update URL is not from GitHub");
+        if (!isAllowedUrl(url) || !isReleaseAssetUrl(url)) {
+            resolveFailed(call, "Update URL is not a ClearNine release");
             return;
         }
 
@@ -130,23 +141,23 @@ public class ApkInstallerPlugin extends Plugin {
         }
         File dest = new File(dir, FILE_NAME);
 
-        cancelRequested.set(false);
-        io.execute(() -> downloadThenInstall(call, url, dest));
+        final int job = jobSeq.incrementAndGet();
+        io.execute(() -> downloadThenInstall(call, url, dest, job));
     }
 
-    private void downloadThenInstall(PluginCall call, String startUrl, File dest) {
+    private void downloadThenInstall(PluginCall call, String startUrl, File dest, int job) {
         try {
-            downloadToFile(startUrl, dest);
-            if (cancelRequested.get()) {
+            downloadToFile(startUrl, dest, job);
+            if (isCancelled(job)) {
                 resolveCancelled(call);
                 return;
             }
-            if (!looksLikeApk(dest)) {
+            if (!looksLikeApk(dest) || !isThisApp(dest)) {
                 if (dest.exists()) {
                     //noinspection ResultOfMethodCallIgnored
                     dest.delete();
                 }
-                resolveFailed(call, "Downloaded file is not an APK");
+                resolveFailed(call, "Downloaded file is not a ClearNine update");
                 return;
             }
             new Handler(Looper.getMainLooper()).post(() -> installApk(call, dest));
@@ -154,7 +165,7 @@ public class ApkInstallerPlugin extends Plugin {
             resolveCancelled(call);
         } catch (Exception ex) {
             Logger.error(TAG, "download failed", ex);
-            if (cancelRequested.get()) {
+            if (isCancelled(job)) {
                 resolveCancelled(call);
                 return;
             }
@@ -168,7 +179,7 @@ public class ApkInstallerPlugin extends Plugin {
         }
     }
 
-    private void downloadToFile(String startUrl, File dest) throws Exception {
+    private void downloadToFile(String startUrl, File dest, int job) throws Exception {
         if (dest.exists() && !dest.delete()) {
             Logger.warn(TAG, "Could not delete previous APK");
         }
@@ -180,7 +191,7 @@ public class ApkInstallerPlugin extends Plugin {
 
         try {
             for (int hop = 0; hop <= MAX_REDIRECTS; hop++) {
-                throwIfCancelled();
+                throwIfCancelled(job);
                 if (System.currentTimeMillis() - startedAt > TIMEOUT_MS) {
                     throw new Exception("Download timed out");
                 }
@@ -226,6 +237,9 @@ public class ApkInstallerPlugin extends Plugin {
                 }
 
                 long total = conn.getContentLengthLong();
+                if (total > MAX_APK_BYTES) {
+                    throw new Exception("Update file is too large");
+                }
                 emitProgress(0, total);
 
                 try (InputStream raw = conn.getInputStream();
@@ -235,9 +249,12 @@ public class ApkInstallerPlugin extends Plugin {
                     long copied = 0;
                     long lastEmit = 0;
                     while (true) {
-                        throwIfCancelled();
+                        throwIfCancelled(job);
                         if (System.currentTimeMillis() - startedAt > TIMEOUT_MS) {
                             throw new Exception("Download timed out");
+                        }
+                        if (copied > MAX_APK_BYTES) {
+                            throw new Exception("Update file is too large");
                         }
                         int toRead = buf.length;
                         if (total > 0) {
@@ -278,8 +295,8 @@ public class ApkInstallerPlugin extends Plugin {
         }
     }
 
-    private void throwIfCancelled() throws CancelledException {
-        if (cancelRequested.get()) {
+    private void throwIfCancelled(int job) throws CancelledException {
+        if (isCancelled(job)) {
             throw new CancelledException();
         }
     }
@@ -330,6 +347,21 @@ public class ApkInstallerPlugin extends Plugin {
         }
     }
 
+    /**
+     * The download must be this app. Android then only installs it over the
+     * current copy if it is signed with the same key, so a file that passes
+     * here cannot put a different app on the phone.
+     */
+    private boolean isThisApp(File dest) {
+        try {
+            PackageInfo info = getContext().getPackageManager().getPackageArchiveInfo(dest.getAbsolutePath(), 0);
+            return info != null && getContext().getPackageName().equals(info.packageName);
+        } catch (Exception ex) {
+            Logger.error(TAG, "could not read downloaded APK", ex);
+            return false;
+        }
+    }
+
     private void installApk(PluginCall call, File dest) {
         if (!dest.exists() || dest.length() <= 0) {
             resolveFailed(call, "Downloaded file is missing");
@@ -366,6 +398,24 @@ public class ApkInstallerPlugin extends Plugin {
             Logger.error(TAG, "install prompt failed", ex);
             resolveFailed(call, "Could not open installer");
         }
+    }
+
+    /** Starts in this project's release assets and cannot climb out with dot segments or escapes. */
+    private static boolean isReleaseAssetUrl(String url) {
+        if (!url.startsWith(RELEASE_ASSET_PREFIX)) {
+            return false;
+        }
+        String rest = url.substring(RELEASE_ASSET_PREFIX.length());
+        if (rest.isEmpty() || rest.contains("..")) {
+            return false;
+        }
+        for (int i = 0; i < rest.length(); i++) {
+            char ch = rest.charAt(i);
+            if (ch == '%' || ch == '\\' || ch == '?' || ch == '#' || ch == '@') {
+                return false;
+            }
+        }
+        return true;
     }
 
     /** HTTPS GitHub hosts only. Shared by openUrl and APK downloads (including redirects). */

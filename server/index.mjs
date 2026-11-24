@@ -49,6 +49,47 @@ export function periodOk(mode, periodKey) {
   return false;
 }
 
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+function utcDateKey(ms) {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/** Same ISO-style week key the app builds (src/game/expert.ts). */
+function utcWeekKey(ms) {
+  const d = new Date(ms);
+  const date = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((date.getTime() - yearStart.getTime()) / DAY_MS + 1) / 7);
+  return `${date.getUTCFullYear()}-W${String(week).padStart(2, '0')}`;
+}
+
+/**
+ * A score may only be posted for a day or week that is current somewhere on
+ * Earth, give or take a day for a run that ended around midnight. Without this
+ * anyone could post to far-future dates and push every real board out of the
+ * "newest N periods" that pruning keeps.
+ */
+export function periodIsCurrent(mode, periodKey, nowMs = Date.now()) {
+  if (mode === 'classic' || mode === 'blitz') return true;
+  const period = String(periodKey ?? '');
+  if (mode === 'daily') {
+    for (let offset = -2; offset <= 2; offset++) {
+      if (utcDateKey(nowMs + offset * DAY_MS) === period) return true;
+    }
+    return false;
+  }
+  if (mode === 'weekly') {
+    for (let offset = -2; offset <= 2; offset++) {
+      if (utcWeekKey(nowMs + offset * DAY_MS) === period) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
 function trustProxyFromEnv() {
   return /^(1|true|yes)$/i.test(String(process.env.C9_TRUST_PROXY || '').trim());
 }
@@ -185,6 +226,7 @@ function cleanDeviceId(raw) {
  * @param {number} [options.devicePostsPerHour]
  * @param {number} [options.allRequestsPerHour]
  * @param {{ boards: Record<string, unknown[]> }} [options.db]
+ * @param {() => number} [options.now] Clock for the posting window (tests).
  */
 export function createApp(options = {}) {
   const dataFile = options.dataFile ?? DATA_FILE;
@@ -196,6 +238,7 @@ export function createApp(options = {}) {
   const ipPostsPerHour = options.ipPostsPerHour ?? IP_POSTS_PER_HOUR;
   const devicePostsPerHour = options.devicePostsPerHour ?? POST_PER_HOUR;
   const allRequestsPerHour = options.allRequestsPerHour ?? ALL_REQUESTS_PER_HOUR;
+  const now = typeof options.now === 'function' ? options.now : () => Date.now();
   const db = options.db && typeof options.db === 'object' ? options.db : { boards: {} };
   if (!db.boards || typeof db.boards !== 'object') db.boards = {};
 
@@ -338,6 +381,10 @@ export function createApp(options = {}) {
       json(res, 400, { error: 'bad period' });
       return;
     }
+    if (!periodIsCurrent(mode, periodKey, now())) {
+      json(res, 400, { error: 'period closed' });
+      return;
+    }
     const key = boardKey(mode, expert, periodKey);
     if (!key) {
       json(res, 400, { error: 'bad fields' });
@@ -361,7 +408,7 @@ export function createApp(options = {}) {
     }
 
     const list = db.boards[key] || [];
-    const now = new Date().toISOString();
+    const stamp = new Date().toISOString();
     const existing = list.find((r) => r.deviceId === deviceId);
     if (existing && score <= existing.score) {
       if (pruneOldBoards()) saveDb();
@@ -373,7 +420,7 @@ export function createApp(options = {}) {
       existing.score = Math.floor(score);
       existing.cleared = cleared;
       existing.version = version;
-      existing.at = now;
+      existing.at = stamp;
     } else {
       list.push({
         deviceId,
@@ -381,7 +428,7 @@ export function createApp(options = {}) {
         score: Math.floor(score),
         cleared,
         version,
-        at: now,
+        at: stamp,
       });
     }
     list.sort((a, b) => b.score - a.score || a.at.localeCompare(b.at));

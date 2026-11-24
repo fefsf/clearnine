@@ -37,6 +37,19 @@ export function isGithubUpdateUrl(raw: string): boolean {
   return host.endsWith('.amazonaws.com') && host.includes('github-production-release-asset');
 }
 
+/** Release assets of this project only. Keep in sync with RELEASE_ASSET_PREFIX in the plugin. */
+const RELEASE_ASSET_PREFIX = 'https://github.com/fefsf/clearnine/releases/download/';
+
+/**
+ * The only place an update APK may be fetched from. The text must start with
+ * the release path and must not climb out of it with dot segments or escapes.
+ */
+export function isReleaseApkUrl(raw: string): boolean {
+  if (!isGithubUpdateUrl(raw) || !raw.startsWith(RELEASE_ASSET_PREFIX)) return false;
+  const rest = raw.slice(RELEASE_ASSET_PREFIX.length);
+  return rest.length > 0 && !rest.includes('..') && !/[%\\?#@]/.test(rest);
+}
+
 const ApkInstallerRaw = registerPlugin<ApkInstallerPlugin>('ApkInstaller', {
   web: {
     async downloadAndInstall(options: { url: string }): Promise<ApkInstallResult> {
@@ -55,8 +68,8 @@ const ApkInstallerRaw = registerPlugin<ApkInstallerPlugin>('ApkInstaller', {
 
 export const ApkInstaller: ApkInstallerPlugin = {
   downloadAndInstall(options) {
-    if (!isGithubUpdateUrl(options.url)) {
-      return Promise.resolve({ status: 'failed', message: 'Update URL is not from GitHub' });
+    if (!isReleaseApkUrl(options.url)) {
+      return Promise.resolve({ status: 'failed', message: 'Update URL is not a ClearNine release' });
     }
     return ApkInstallerRaw.downloadAndInstall(options);
   },

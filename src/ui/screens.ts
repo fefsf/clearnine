@@ -200,12 +200,12 @@ export function renderHome(
         ${continueBtn}
 
         <button type="button" class="menu-btn primary" id="btn-classic">
-          <span class="menu-title">${continueInfo?.mode === 'classic' ? 'New Play game' : 'Play'}</span>
+          <span class="menu-title">Play</span>
           <span class="menu-meta">${playLine} · Best: ${classicBest}</span>
         </button>
 
         <button type="button" class="menu-btn" id="btn-daily" title="${htmlText(daily.meta)} · Best: ${dailyBest}">
-          <span class="menu-title">${continueInfo?.mode === 'daily' ? 'New Today’s Puzzle' : expert ? 'Expert Daily' : 'Today’s Puzzle'}</span>
+          <span class="menu-title">${expert ? 'Expert Daily' : 'Today’s Puzzle'}</span>
           <span class="menu-meta">${htmlText(daily.meta)} · Best: ${dailyBest}</span>
         </button>
 
@@ -237,6 +237,7 @@ export function renderHome(
         <button type="button" class="text-btn howto-link" id="btn-howto">
           ${expert ? 'How to Play Expert Mode' : 'How to Play'}
         </button>
+        <p class="home-version">Version ${APP_VERSION}</p>
       </div>
     </div>
   `;
@@ -495,8 +496,8 @@ export function renderRecords(root: HTMLElement, profile: Profile, h: ScreenHand
       const tag = g.expert ? ' · Expert' : '';
       return `<li>
           <span class="rec-mode">${label}${tag}</span>
-          <span class="rec-score">${g.score} points</span>
-          <span class="rec-date">${g.date}</span>
+          <span class="rec-score">${Number(g.score) || 0} points</span>
+          <span class="rec-date">${htmlText(String(g.date))}</span>
         </li>`;
     })
     .join('');
@@ -700,7 +701,7 @@ export function renderSettings(root: HTMLElement, profile: Profile, h: ScreenHan
         <label class="settings-name">
           <span class="settings-name-label">Leaderboard name</span>
           <input type="text" id="board-name" maxlength="20" autocomplete="nickname" spellcheck="false"
-            placeholder="Shown on the leaderboard"
+            placeholder="Letters, numbers, spaces . _ -"
             value="${escapeHtml(profile.leaderboardName)}" />
         </label>
         <p class="settings-name-hint">Optional. Play stays on your phone. The leaderboard only gets a name and score if this is On.</p>
@@ -802,9 +803,9 @@ export function renderBoard(
     body = `<ol class="board-list">${state.rows
       .map(
         (r) => `<li class="${r.you ? 'you' : ''}">
-          <span class="board-rank">${r.rank}</span>
+          <span class="board-rank">${Number(r.rank) || 0}</span>
           <span class="board-name">${escapeHtml(r.name)}${r.you ? ' · you' : ''}</span>
-          <span class="board-score">${r.score}</span>
+          <span class="board-score">${Number(r.score) || 0}</span>
         </li>`,
       )
       .join('')}</ol>`;
@@ -929,7 +930,7 @@ export function askConfirm(message: string): Promise<boolean> {
     wrap.innerHTML = `
       <div class="dialog" role="alertdialog" aria-modal="true">
         <h2>Please confirm</h2>
-        <p class="confirm-msg">${message}</p>
+        <p class="confirm-msg">${escapeHtml(message)}</p>
         <button type="button" class="primary-btn" id="confirm-yes">Yes</button>
         <button type="button" class="secondary-btn" id="confirm-no" data-back>No, go back</button>
       </div>`;
@@ -940,6 +941,33 @@ export function askConfirm(message: string): Promise<boolean> {
     };
     wrap.querySelector('#confirm-yes')!.addEventListener('click', () => done(true));
     wrap.querySelector('#confirm-no')!.addEventListener('click', () => done(false));
+  });
+}
+
+export type ResumeChoice = 'continue' | 'new' | 'cancel';
+
+/** A saved game exists for this mode: pick it up, or close it out and start again. */
+export function askResume(opts: { label: string; score: number }): Promise<ResumeChoice> {
+  return new Promise((resolve) => {
+    const wrap = document.createElement('div');
+    wrap.className = 'overlay show confirm-overlay';
+    wrap.innerHTML = `
+      <div class="dialog" role="alertdialog" aria-modal="true">
+        <h2>${escapeHtml(opts.label)}</h2>
+        <p class="confirm-msg">You have a game in progress with ${Number(opts.score) || 0} points.</p>
+        <button type="button" class="primary-btn" id="resume-continue">Continue that game</button>
+        <button type="button" class="secondary-btn" id="resume-new">Start a new one</button>
+        <p class="confirm-msg">Starting new saves that score and ends the old game.</p>
+        <button type="button" class="secondary-btn" id="resume-cancel" data-back>Go back</button>
+      </div>`;
+    document.body.appendChild(wrap);
+    const done = (v: ResumeChoice) => {
+      wrap.remove();
+      resolve(v);
+    };
+    wrap.querySelector('#resume-continue')!.addEventListener('click', () => done('continue'));
+    wrap.querySelector('#resume-new')!.addEventListener('click', () => done('new'));
+    wrap.querySelector('#resume-cancel')!.addEventListener('click', () => done('cancel'));
   });
 }
 

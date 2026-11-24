@@ -50,6 +50,21 @@ export function tabToQuery(tab: BoardTab, today: string, week: string): {
   return { mode: 'blitz', expert: true, period: '' };
 }
 
+/** Same rule the server applies. Keep in sync with cleanName in server/index.mjs. */
+const NAME_OK = /^[\p{L}\p{N} ._\-]+$/u;
+
+export function cleanBoardName(raw: string): string {
+  return raw.replace(/\s+/g, ' ').trim().slice(0, 20);
+}
+
+/** Why the server would refuse this name, or null when it is fine. */
+export function boardNameProblem(raw: string): string | null {
+  const name = cleanBoardName(raw);
+  if (!name) return 'Type a leaderboard name first';
+  if (!NAME_OK.test(name)) return 'Use only letters, numbers, spaces, . _ and - in the name';
+  return null;
+}
+
 export function deviceId(): string {
   try {
     const existing = localStorage.getItem(STORAGE_DEVICE);
@@ -63,6 +78,15 @@ export function deviceId(): string {
   }
 }
 
+/** The server answered, but refused the request. `status` says why. */
+export class BoardError extends Error {
+  status: number;
+  constructor(status: number) {
+    super(`Board ${status}`);
+    this.status = status;
+  }
+}
+
 async function api<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${LEADERBOARD_URL}${path}`, {
     ...init,
@@ -72,7 +96,7 @@ async function api<T>(path: string, init?: RequestInit): Promise<T> {
       ...(init?.headers ?? {}),
     },
   });
-  if (!res.ok) throw new Error(`Board ${res.status}`);
+  if (!res.ok) throw new BoardError(res.status);
   return (await res.json()) as T;
 }
 
@@ -119,4 +143,79 @@ export async function pingBoard(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+const STORAGE_POSTED = 'clearnine-board-posted';
+
+function readPosted(): Record<string, number> {
+  try {
+    const raw = localStorage.getItem(STORAGE_POSTED);
+    const parsed = raw ? (JSON.parse(raw) as unknown) : null;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+    const out: Record<string, number> = {};
+    for (const [key, value] of Object.entries(parsed as Record<string, unknown>)) {
+      if (typeof value === 'number' && Number.isFinite(value)) out[key] = value;
+    }
+    return out;
+  } catch {
+    return {};
+  }
+}
+
+function writePosted(map: Record<string, number>): void {
+  try {
+    // Dated boards pile up; keep the newest few dozen keys.
+    const keys = Object.keys(map).sort();
+    const trimmed: Record<string, number> = {};
+    for (const key of keys.slice(-80)) trimmed[key] = map[key]!;
+    localStorage.setItem(STORAGE_POSTED, JSON.stringify(trimmed));
+  } catch {
+    /* posting again later is harmless */
+  }
+}
+
+/** Remember that the server has at least this score for the board (per name). */
+export function markPosted(name: string, mode: GameMode, expert: boolean, periodKey: string, score: number): void {
+  const key = boardKey(mode, expert, periodKey);
+  if (!key) return;
+  const map = readPosted();
+  const slot = `${key}|${name}`;
+  if ((map[slot] ?? 0) >= score) return;
+  map[slot] = score;
+  writePosted(map);
+}
+
+export type LocalBest = { mode: GameMode; expert: boolean; periodKey: string; score: number };
+
+/**
+ * Post any local best the server has not confirmed yet (a game that ended
+ * offline, or one credited after a restart). Returns how many boards improved.
+ * Stops at the first network failure; the next call tries again.
+ */
+export async function syncLocalBests(name: string, bests: LocalBest[]): Promise<number> {
+  let improved = 0;
+  const posted = readPosted();
+  for (const best of bests) {
+    const key = boardKey(best.mode, best.expert, best.periodKey);
+    if (!key || best.score < 1) continue;
+    if ((posted[`${key}|${name}`] ?? 0) >= best.score) continue;
+    let result: { ok: boolean; improved?: boolean };
+    try {
+      result = await submitScore({
+        name,
+        mode: best.mode,
+        expert: best.expert,
+        score: best.score,
+        cleared: 0,
+        periodKey: best.periodKey,
+      });
+    } catch (err) {
+      // One refused board must not hold back the others. A dead network does stop the pass.
+      if (err instanceof BoardError && err.status === 400) continue;
+      throw err;
+    }
+    if (result.ok) markPosted(name, best.mode, best.expert, best.periodKey, best.score);
+    if (result.improved) improved += 1;
+  }
+  return improved;
 }

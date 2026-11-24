@@ -750,6 +750,30 @@ export class Game {
     }
   }
 
+  /** Load a save into a throwaway Game without touching storage. */
+  restoreForSummary(saved: GameSave): void {
+    this.applySave(saved);
+  }
+
+  /** This run as a finished-game record. Used at game over and when a run is closed early. */
+  runSummary(): SavedRun {
+    return {
+      mode: this.mode,
+      expert: this.expert,
+      score: this.score,
+      cleared: this.clearsThisGame,
+      date: this.dailyDate,
+      week: this.mode === 'weekly' ? this.weekId : undefined,
+      practice: this.practiceRun(),
+      dailyGoalMet: this.mode === 'daily' && this.dailyGoalMet,
+    };
+  }
+
+  /** True when there is something worth crediting if this run is closed now. */
+  inProgress(): boolean {
+    return this.mode !== 'puzzle' && !this.gameOver && this.score > 0;
+  }
+
   canPlaceAt(trayIndex: number, row: number, col: number): boolean {
     const piece = this.tray[trayIndex];
     if (!piece) return false;
@@ -866,10 +890,42 @@ function loadSave(
       return null;
     }
     if (!saved.rng) return null;
+    if (!saveShapeOk(saved)) return null;
     return saved;
   } catch {
     return null;
   }
+}
+
+function pieceShapeOk(piece: unknown): boolean {
+  if (piece == null) return true;
+  const p = piece as PieceDef;
+  if (typeof p !== 'object' || typeof p.id !== 'string' || !Array.isArray(p.cells)) return false;
+  if (p.cells.length < 1 || p.cells.length > 16) return false;
+  return p.cells.every(
+    (c) =>
+      !!c &&
+      Number.isInteger(c.r) && Number.isInteger(c.c) &&
+      c.r >= 0 && c.r < 9 && c.c >= 0 && c.c < 9,
+  );
+}
+
+/** A save the play screen can paint. A damaged one starts a new game instead of crashing. */
+function saveShapeOk(saved: GameSave): boolean {
+  if (!saved || typeof saved !== 'object') return false;
+  if (!Array.isArray(saved.board) || saved.board.length !== 9) return false;
+  for (const row of saved.board) {
+    if (!Array.isArray(row) || row.length !== 9) return false;
+    for (const cell of row) {
+      if (!Number.isInteger(cell) || cell < 0 || cell > 8) return false;
+    }
+  }
+  if (!Array.isArray(saved.tray) || saved.tray.length !== 3) return false;
+  if (!saved.tray.every(pieceShapeOk) || !pieceShapeOk(saved.hold ?? null)) return false;
+  if (typeof saved.score !== 'number' || !Number.isFinite(saved.score) || saved.score < 0) return false;
+  if (typeof saved.streak !== 'number' || !Number.isFinite(saved.streak) || saved.streak < 0) return false;
+  if (typeof saved.rng.seed !== 'number' || typeof saved.rng.counter !== 'number') return false;
+  return true;
 }
 
 function clearSave(mode: GameMode, expert = false): void {
@@ -961,4 +1017,73 @@ export function puzzleResumeId(): string | null {
   const saved = loadSave('puzzle', todayKey(), weekKey(), false);
   if (!saveIsContinuable(saved) || typeof saved.puzzleId !== 'string' || !saved.puzzleId) return null;
   return saved.puzzleId;
+}
+
+/** Drop the saved run for this mode. Call before crediting it so it cannot be credited twice. */
+export function clearSavedRun(mode: GameMode, expert: boolean): void {
+  clearSave(mode, expert);
+}
+
+/** What an unfinished saved run is worth if it is closed out now. */
+export type SavedRun = {
+  mode: GameMode;
+  expert: boolean;
+  score: number;
+  cleared: number;
+  date: string;
+  week?: string;
+  practice: boolean;
+  dailyGoalMet: boolean;
+};
+
+function summarize(saved: GameSave): SavedRun {
+  const probe = new Game();
+  probe.restoreForSummary(saved);
+  return probe.runSummary();
+}
+
+/**
+ * The unfinished run saved for this mode today (or this week), or null.
+ * Used to credit a run before the player replaces it with a new one.
+ */
+export function savedRunSummary(mode: GameMode, expert: boolean): SavedRun | null {
+  if (mode === 'puzzle') return null;
+  const saved = loadSave(mode, todayKey(), weekKey(), expert);
+  if (!saveIsContinuable(saved)) return null;
+  return summarize(saved);
+}
+
+/**
+ * Daily and Weekly saves from a day or week that has ended. They can no longer
+ * be resumed, so each one is removed and returned to be credited as finished.
+ */
+export function takeExpiredRuns(today = todayKey(), week = weekKey()): SavedRun[] {
+  const out: SavedRun[] = [];
+  const lanes: Array<{ mode: GameMode; expert: boolean }> = [
+    { mode: 'daily', expert: false },
+    { mode: 'daily', expert: true },
+    { mode: 'weekly', expert: false },
+    { mode: 'weekly', expert: true },
+  ];
+  for (const lane of lanes) {
+    try {
+      const key = saveKey(lane.mode, lane.expert);
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const saved = JSON.parse(raw) as GameSave;
+      if (!saved || typeof saved !== 'object' || saved.mode !== lane.mode) continue;
+      if ((saved.expert ?? false) !== lane.expert) continue;
+      const period = lane.mode === 'daily' ? saved.dailyDate : saved.weekKey;
+      const current = lane.mode === 'daily' ? today : week;
+      if (typeof period !== 'string' || period === current) continue;
+      // Only periods that are over. A clock set backward must not eat a live save.
+      if (period > current) continue;
+      localStorage.removeItem(key);
+      if (!saved.rng || !saveShapeOk(saved) || !saveIsContinuable(saved)) continue;
+      if (saved.score > 0) out.push(summarize(saved));
+    } catch {
+      /* ignore a damaged save */
+    }
+  }
+  return out;
 }

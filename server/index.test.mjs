@@ -93,7 +93,7 @@ describe('leaderboard server', () => {
   });
 
   it('accepts only the period shapes the client sends', async () => {
-    await withApp({}, async ({ base }) => {
+    await withApp({ now: () => Date.parse('2026-08-28T12:00:00Z') }, async ({ base }) => {
       const daily = await postScore(base, scoreBody({ mode: 'daily', periodKey: '2026-08-28', deviceId: 'player-day001' }));
       expect(daily.status).toBe(200);
       const week = await postScore(base, scoreBody({ mode: 'weekly', periodKey: '2026-W35', deviceId: 'player-week01' }));
@@ -108,6 +108,24 @@ describe('leaderboard server', () => {
       expect(board.status).toBe(400);
       const classic = await fetch(`${base}/v1/board?mode=classic&expert=0&period=`);
       expect(classic.status).toBe(200);
+    });
+  });
+
+  it('refuses scores for days and weeks that are not current', async () => {
+    const boards = { 'daily-2026-08-27': [], 'daily-2026-08-28': [] };
+    await withApp({ keepPeriods: 2, db: { boards }, now: () => Date.parse('2026-08-28T12:00:00Z') }, async ({ app, base }) => {
+      const future = await postScore(base, scoreBody({ mode: 'daily', periodKey: '2099-12-31', deviceId: 'player-fut001' }));
+      expect(future.status).toBe(400);
+      expect(future.json.error).toBe('period closed');
+      const old = await postScore(base, scoreBody({ mode: 'daily', periodKey: '2026-08-01', deviceId: 'player-old001' }));
+      expect(old.status).toBe(400);
+      const farWeek = await postScore(base, scoreBody({ mode: 'weekly', periodKey: '2099-W01', deviceId: 'player-fut002' }));
+      expect(farWeek.status).toBe(400);
+      // A run that ended just after midnight still posts to yesterday.
+      const yesterday = await postScore(base, scoreBody({ mode: 'daily', periodKey: '2026-08-27', deviceId: 'player-yday01' }));
+      expect(yesterday.status).toBe(200);
+      // The real boards were not pushed out.
+      expect(Object.keys(app.getDb().boards).sort()).toEqual(['daily-2026-08-27', 'daily-2026-08-28']);
     });
   });
 
@@ -160,7 +178,7 @@ describe('leaderboard server', () => {
       'weekly-2024-W03': [{ ...row }],
       classic: [{ ...row, score: 99 }],
     };
-    await withApp({ keepPeriods: 2, db: { boards } }, async ({ app, base }) => {
+    await withApp({ keepPeriods: 2, db: { boards }, now: () => Date.parse('2024-01-03T12:00:00Z') }, async ({ app, base }) => {
       const posted = await postScore(
         base,
         scoreBody({ mode: 'daily', periodKey: '2024-01-03', deviceId: 'player-new001', score: 50 }),

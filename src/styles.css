@@ -1389,6 +1389,14 @@ body {
   flex-shrink: 0;
 }
 
+.home-screen .home-version {
+  margin: 0;
+  text-align: center;
+  color: var(--text-dim);
+  font-size: calc(0.85rem * var(--home-d));
+  font-weight: 700;
+}
+
 .home-screen .howto-link:active {
   transform: none;
   color: var(--accent);

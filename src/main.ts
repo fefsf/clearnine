@@ -1,5 +1,14 @@
 import { BOARD_SIZE, REGION, findNearestPlacement, pieceFitsAnywhere, type ClearResult } from './game/board';
-import { findContinueFor, findContinueGame, Game, puzzleResumeId } from './game/game';
+import {
+  clearSavedRun,
+  findContinueFor,
+  findContinueGame,
+  Game,
+  puzzleResumeId,
+  savedRunSummary,
+  takeExpiredRuns,
+  type SavedRun,
+} from './game/game';
 import { getWeeklyMandate, weekKey } from './game/expert';
 import { evaluateGoals } from './game/goals';
 import { cellCount, colorForPiece, pieceBounds, type PieceDef } from './game/pieces';
@@ -11,6 +20,7 @@ import {
   nextPuzzleId,
 } from './game/puzzles';
 import {
+  bankDailyGoal,
   getDailyBest,
   getWeeklyBest,
   loadProfile,
@@ -23,7 +33,7 @@ import {
   type GameMode,
   type Profile,
 } from './game/stats';
-import { applyTheme, getActiveSeason, isThemeUnlocked, resolveLook, THEMES } from './game/themes';
+import { applyTheme, getActiveSeason, isThemeUnlocked, THEMES } from './game/themes';
 import { Sfx } from './audio/sfx';
 import {
   hapticBad,
@@ -36,6 +46,7 @@ import {
 } from './audio/feel';
 import {
   askConfirm,
+  askResume,
   askUpdateAvailable,
   homeDayLine,
   homeSeasonLine,
@@ -68,7 +79,18 @@ import {
 } from './app/update';
 import { APP_VERSION } from './app/version';
 import { CONFETTI_BURST, confettiBitsForCombo, sparkCountForClear } from './ui/fx-math';
-import { fetchBoard, submitScore, type BoardRow, type BoardTab } from './app/leaderboard';
+import {
+  BoardError,
+  boardNameProblem,
+  cleanBoardName,
+  fetchBoard,
+  markPosted,
+  submitScore,
+  syncLocalBests,
+  type BoardRow,
+  type BoardTab,
+  type LocalBest,
+} from './app/leaderboard';
 import { App } from '@capacitor/app';
 import { Capacitor } from '@capacitor/core';
 import './styles.css';
@@ -82,8 +104,6 @@ const sfx = new Sfx();
 let profile: Profile = loadProfile();
 sfx.muted = profile.mute;
 setHapticsEnabled(profile.haptics);
-/** Season id that already played its home sting this session. */
-let stungSeasonId: string | null = null;
 
 function applyCurrentLook(date = new Date()): void {
   applyTheme(profile.themeId, {
@@ -106,6 +126,12 @@ let scoreAnim: number | null = null;
 let gameOverFinalized = false;
 /** Bumped when leaving play so delayed clear/game-over callbacks no-op. */
 let playSessionId = 0;
+/**
+ * False from the moment a play screen is requested until its game is loaded.
+ * In that gap `game` still holds the previous run, so nothing may save or
+ * finalize it under the new mode.
+ */
+let playReady = false;
 let clearAnimTimer: ReturnType<typeof setTimeout> | null = null;
 
 function modeTitle(mode: GameMode): string {
@@ -123,8 +149,9 @@ function modeTitle(mode: GameMode): string {
 }
 
 function bestTarget(): number {
-  if (game.mode === 'daily') return getDailyBest(profile, todayKey(), game.expert);
-  if (game.mode === 'weekly') return getWeeklyBest(profile, weekKey());
+  // The run's own day or week, so a game played across midnight compares fairly.
+  if (game.mode === 'daily') return getDailyBest(profile, game.periodKey, game.expert);
+  if (game.mode === 'weekly') return getWeeklyBest(profile, game.periodKey);
   if (game.mode === 'blitz') return profile.bestBlitz;
   return game.expert ? profile.bestClassicExpert : profile.bestClassic;
 }
@@ -233,19 +260,27 @@ const handlers: ScreenHandlers = {
     showToast(`Piece difficulty: ${name}`);
   },
   onToggleLeaderboard: () => {
-    if (!profile.leaderboardOn && !profile.leaderboardName.trim()) {
-      showToast('Type a leaderboard name first');
-      return;
+    if (!profile.leaderboardOn) {
+      const problem = boardNameProblem(profile.leaderboardName);
+      if (problem) {
+        showToast(problem);
+        return;
+      }
     }
     profile.leaderboardOn = !profile.leaderboardOn;
     saveProfile(profile);
     hapticTap();
     sfx.tap();
     showToast(profile.leaderboardOn ? 'Leaderboard is on — scores can post' : 'Leaderboard is off');
+    if (profile.leaderboardOn) void syncBoardBests();
   },
   onSaveLeaderboardName: (name) => {
-    profile.leaderboardName = name.replace(/\s+/g, ' ').trim().slice(0, 20);
+    profile.leaderboardName = cleanBoardName(name);
     saveProfile(profile);
+    // The server refuses other characters, so say so now instead of failing after a game.
+    if (profile.leaderboardName && boardNameProblem(profile.leaderboardName)) {
+      showToast('Use only letters, numbers, spaces, . _ and - in the name');
+    }
   },
   onCheckUpdate: () => {
     void runUpdateCheck({ force: true, fromSettings: true });
@@ -262,19 +297,58 @@ const handlers: ScreenHandlers = {
   },
 };
 
+function menuModeLabel(mode: GameMode, expert: boolean): string {
+  if (mode === 'daily') return expert ? 'Expert Daily' : 'Today’s Puzzle';
+  if (mode === 'weekly') return `Weekly · ${getWeeklyMandate(weekKey()).name}`;
+  if (mode === 'blitz') return 'Endgame Sprint';
+  return expert ? 'Expert Play' : 'Play';
+}
+
+/** Count a run that is being closed before the board filled up. */
+function creditRun(run: SavedRun): void {
+  if (run.mode === 'puzzle' || run.score <= 0) return;
+  recordGameFinished(profile, {
+    mode: run.mode,
+    score: run.score,
+    cleared: run.cleared,
+    week: run.week,
+    date: run.mode === 'daily' ? run.date : undefined,
+    expert: run.expert,
+    practice: run.practice,
+    dailyGoalMet: run.dailyGoalMet,
+  });
+  checkAndToastGoals();
+}
+
+/** Daily and Weekly runs left unfinished when their day or week ended still count. */
+function settleExpiredRuns(): void {
+  for (const run of takeExpiredRuns()) creditRun(run);
+}
+
+let beginBusy = false;
+
 async function beginMode(mode: GameMode): Promise<void> {
-  const cont = findContinueFor(mode, profile.expertMode);
-  if (cont) {
-    const ok = await askConfirm(
-      mode === 'daily'
-        ? 'Start a brand new Today’s Puzzle? Your current puzzle will be cleared.'
-        : mode === 'weekly'
-          ? `Start a brand new Weekly Mandate (${getWeeklyMandate(weekKey()).name})? Your current board will be cleared.`
-          : 'Start a brand new game? Your current board will be cleared.',
-    );
-    if (!ok) return;
+  if (beginBusy) return;
+  beginBusy = true;
+  try {
+    const expert = profile.expertMode;
+    const cont = findContinueFor(mode, expert);
+    if (cont) {
+      // Each mode keeps its own saved game, so its button must be able to reopen it.
+      const choice = await askResume({ label: menuModeLabel(mode, expert), score: cont.score });
+      if (choice === 'cancel') return;
+      if (choice === 'continue') {
+        startPlay(mode, true, expert);
+        return;
+      }
+      const run = savedRunSummary(mode, expert);
+      clearSavedRun(mode, expert);
+      if (run) creditRun(run);
+    }
+    startPlay(mode, false);
+  } finally {
+    beginBusy = false;
   }
-  startPlay(mode, false);
 }
 
 type AppView = 'home' | 'play' | 'panel' | 'puzzles';
@@ -282,25 +356,26 @@ let appView: AppView = 'home';
 
 function showHome(): void {
   if (appView === 'play' && game.mode === 'puzzle' && game.puzzleWon) commitPuzzleSolve();
-  if (appView === 'play' && !game.gameOver && !game.puzzleWon) {
+  if (appView === 'play' && playReady && !game.gameOver && !game.puzzleWon) {
     game.persist();
   }
   stopHintTimer();
   teardownPlayLayout();
   teardownHomeLayout();
   profile = loadProfile();
+  settleExpiredRuns();
+  void syncBoardBests();
   appView = 'home';
   applyCurrentLook();
   transitionScreen(app, () => {
     renderHome(app, profile, handlers, findContinueGame(profile.expertMode));
     setupHomeLayout();
-    maybeSeasonSting();
   });
 }
 
 function showPuzzleList(): void {
   if (appView === 'play' && game.puzzleWon) commitPuzzleSolve();
-  if (appView === 'play' && !game.gameOver && !game.puzzleWon) game.persist();
+  if (appView === 'play' && playReady && !game.gameOver && !game.puzzleWon) game.persist();
   puzzleSolveSnapshot = null;
   stopHintTimer();
   teardownPlayLayout();
@@ -315,6 +390,8 @@ function showPuzzleList(): void {
 function startPuzzle(id: string): void {
   puzzleSolveSnapshot = null;
   teardownHomeLayout();
+  cancelDrag();
+  playReady = false;
   sessionClears = 0;
   cheeredBestThisGame = false;
   gameOverFinalized = false;
@@ -325,13 +402,14 @@ function startPuzzle(id: string): void {
     clearTimeout(clearAnimTimer);
     clearAnimTimer = null;
   }
-  game.configurePuzzle(id);
   appView = 'play';
   transitionScreen(app, () => {
     if (session !== playSessionId) return;
+    game.configurePuzzle(id);
     mountPlayUi('puzzle');
     // Same puzzle id resumes the local save. A different id, a win, or a fail starts fresh.
     game.loadOrNew();
+    playReady = true;
     sessionClears = game.clearsThisGame;
     displayedScore = 0;
     paintBoard();
@@ -347,17 +425,6 @@ function startPuzzle(id: string): void {
     if (game.puzzleWon || game.gameOver) showPuzzleEnd();
     else resetHintTimer();
   });
-}
-
-function maybeSeasonSting(date = new Date()): void {
-  const { season } = resolveLook(
-    { themeId: profile.themeId, seasonal: profile.seasonal },
-    date,
-  );
-  if (!season || sfx.muted) return;
-  if (stungSeasonId === season.id) return;
-  stungSeasonId = season.id;
-  sfx.seasonSting(season.notes);
 }
 
 function refreshSeasonalLook(date = new Date()): void {
@@ -430,13 +497,47 @@ function showBoard(): void {
     });
   };
   paint(true, null, []);
-  void fetchBoard(tab, todayKey(), weekKey())
+  // Post anything still owed first, so the list that loads already includes it.
+  void syncBoardBests()
+    .then(() => fetchBoard(tab, todayKey(), weekKey()))
     .then((rows) => paint(false, null, rows))
     .catch(() => paint(false, 'Can’t reach the leaderboard right now.', []));
 }
 
+function localBests(): LocalBest[] {
+  const today = todayKey();
+  const week = weekKey();
+  return [
+    { mode: 'classic', expert: false, periodKey: '', score: profile.bestClassic },
+    { mode: 'classic', expert: true, periodKey: '', score: profile.bestClassicExpert },
+    { mode: 'daily', expert: false, periodKey: today, score: getDailyBest(profile, today, false) },
+    { mode: 'daily', expert: true, periodKey: today, score: getDailyBest(profile, today, true) },
+    { mode: 'weekly', expert: true, periodKey: week, score: getWeeklyBest(profile, week) },
+    { mode: 'blitz', expert: true, periodKey: '', score: profile.bestBlitz },
+  ];
+}
+
+let boardSyncBusy = false;
+
+/** Post bests the leaderboard has not confirmed (ended offline, or credited later). Quiet on failure. */
+async function syncBoardBests(): Promise<void> {
+  if (boardSyncBusy || !profile.leaderboardOn) return;
+  const name = profile.leaderboardName.trim();
+  if (boardNameProblem(name)) return;
+  boardSyncBusy = true;
+  try {
+    await syncLocalBests(name, localBests());
+  } catch {
+    /* offline or refused: the next visit tries again */
+  } finally {
+    boardSyncBusy = false;
+  }
+}
+
 function startPlay(mode: GameMode, resume: boolean, expert = profile.expertMode): void {
   teardownHomeLayout();
+  cancelDrag();
+  playReady = false;
   sessionClears = 0;
   cheeredBestThisGame = false;
   gameOverFinalized = false;
@@ -447,22 +548,24 @@ function startPlay(mode: GameMode, resume: boolean, expert = profile.expertMode)
     clearTimeout(clearAnimTimer);
     clearAnimTimer = null;
   }
-  game.configure(mode, {
-    dailyDate: todayKey(),
-    week: weekKey(),
-    expert,
-    holdOption: profile.holdOption,
-    dealDepth: profile.dealDepth,
-  });
   appView = 'play';
   transitionScreen(app, () => {
     if (session !== playSessionId) return;
+    // Configure here, not before the transition: until now `game` is the previous run.
+    game.configure(mode, {
+      dailyDate: todayKey(),
+      week: weekKey(),
+      expert,
+      holdOption: profile.holdOption,
+      dealDepth: profile.dealDepth,
+    });
     mountPlayUi(mode);
     if (resume) {
       game.loadOrNew();
     } else {
       game.newGame();
     }
+    playReady = true;
     sessionClears = game.clearsThisGame;
     displayedScore = game.score;
     paintBoard();
@@ -577,6 +680,8 @@ function mountPlayUi(mode: GameMode): void {
 }
 
 function teardownPlayLayout(): void {
+  cancelDrag();
+  playReady = false;
   stopScoreAnim();
   if (clearAnimTimer) {
     clearTimeout(clearAnimTimer);
@@ -752,6 +857,8 @@ function bindPlayDom(): void {
   });
 
   const performUndo = (): boolean => {
+    // A piece in mid-drag belongs to the position being undone.
+    cancelDrag();
     const result = game.undo();
     if (!result.ok) return false;
     // A pending clear animation must not pop the game-over overlay for a move we just undid.
@@ -793,9 +900,14 @@ function bindPlayDom(): void {
         startFresh();
         return;
       }
-      const ok = await askConfirm('Start over? This board will be cleared.');
+      const ok = await askConfirm(
+        game.inProgress()
+          ? `Start over? Your ${game.score} points will be saved and this board cleared.`
+          : 'Start over? This board will be cleared.',
+      );
       if (!ok) return;
       finalizeGameOverIfNeeded();
+      creditRunInProgress();
       startFresh();
     })();
   });
@@ -849,6 +961,7 @@ function bindPlayDom(): void {
 function buildBoard(): void {
   boardEl.innerHTML = '';
   cells.length = 0;
+  ghostCells = [];
   painted = new Array(BOARD_SIZE * BOARD_SIZE).fill(-1);
   for (let r = 0; r < BOARD_SIZE; r++) {
     for (let c = 0; c < BOARD_SIZE; c++) {
@@ -1111,7 +1224,15 @@ function updateHud(snap = false): void {
     } else {
       bestLabel.textContent = game.expert ? 'Expert best' : 'Best ever';
     }
-    bestEl.textContent = String(Math.max(target, game.score));
+    // A practice run never becomes a best, so the box must not climb with the score.
+    const practice = game.practiceRun();
+    bestEl.classList.toggle('score-objective', practice);
+    if (practice) {
+      bestLabel.textContent = 'Practice';
+      bestEl.textContent = 'Not ranked';
+    } else {
+      bestEl.textContent = String(Math.max(target, game.score));
+    }
 
     if (game.expert && target > 0) {
       beatTargetEl.hidden = false;
@@ -1289,8 +1410,17 @@ function onGameOver(): void {
   }
 }
 
+/** Close out the run on screen before it is replaced (New Game). No-op once it has ended. */
+function creditRunInProgress(): void {
+  if (!playReady || !game.inProgress()) return;
+  const run = game.runSummary();
+  game.clearPersist();
+  creditRun(run);
+  if (!run.practice) void syncBoardBests();
+}
+
 function finalizeGameOverIfNeeded(): void {
-  if (gameOverFinalized || !game.gameOver) return;
+  if (gameOverFinalized || !playReady || !game.gameOver) return;
   gameOverFinalized = true;
   const practice = game.practiceRun();
   const result = recordGameFinished(profile, {
@@ -1330,28 +1460,42 @@ async function maybeSubmitBoardScore(): Promise<void> {
   if (game.practiceRun() || !profile.leaderboardOn) return;
   const name = profile.leaderboardName.trim();
   if (!name || game.score < 1) return;
-  const periodKey =
-    game.mode === 'daily' || game.mode === 'weekly' ? game.periodKey : '';
+  const problem = boardNameProblem(name);
+  if (problem) {
+    showToast(`Leaderboard: ${problem}`);
+    return;
+  }
+  const mode = game.mode;
+  const expert = game.expert;
+  const score = game.score;
+  const periodKey = mode === 'daily' || mode === 'weekly' ? game.periodKey : '';
   try {
     const result = await submitScore({
       name,
-      mode: game.mode,
-      expert: game.expert,
-      score: game.score,
+      mode,
+      expert,
+      score,
       cleared: sessionClears,
       periodKey,
     });
+    if (result.ok) markPosted(name, mode, expert, periodKey, score);
     if (result.improved && result.rank) {
       showToast(`Leaderboard rank #${result.rank}`);
     } else if (result.ok) {
       showToast('Leaderboard already has this best');
     }
-  } catch {
-    showToast('Could not reach the leaderboard');
+  } catch (err) {
+    if (err instanceof BoardError && err.status === 400) {
+      showToast('The leaderboard did not accept that score');
+    } else {
+      // Bests are posted again from the menu and the Leaderboard screen.
+      showToast('Leaderboard not reachable — your best will post later');
+    }
   }
 }
 
 function startFresh(): void {
+  cancelDrag();
   hideGameOver();
   sessionClears = 0;
   cheeredBestThisGame = false;
@@ -1383,7 +1527,7 @@ function showGameOver(): void {
 }
 
 function commitPuzzleSolve(): void {
-  if (game.mode !== 'puzzle' || !game.puzzleWon || !game.puzzleId) return;
+  if (!playReady || game.mode !== 'puzzle' || !game.puzzleWon || !game.puzzleId) return;
   // Remember the entry from before this win so Undo of the winning move can take it back.
   if (!puzzleSolveSnapshot || puzzleSolveSnapshot.id !== game.puzzleId) {
     const prev = profile.puzzlesSolved[game.puzzleId];
@@ -1696,10 +1840,14 @@ function showScorePop(points: number, clientX: number, clientY: number): void {
   setTimeout(() => el.remove(), 800);
 }
 
+/** Cells carrying a placement preview, so a pointer move only touches those. */
+let ghostCells: HTMLDivElement[] = [];
+
 function clearGhostHighlight(): void {
-  for (const cell of cells) {
+  for (const cell of ghostCells) {
     cell.classList.remove('ghost-ok', 'ghost-bad', 'ghost-snap');
   }
+  ghostCells = [];
   dragGhost.classList.remove('ghost-valid', 'ghost-invalid');
 }
 
@@ -1718,6 +1866,7 @@ function highlightGhost(
     const cell = cellAt(br, bc);
     cell.classList.add(valid ? 'ghost-ok' : 'ghost-bad');
     if (valid) cell.classList.add('ghost-snap');
+    ghostCells.push(cell);
   }
 }
 
@@ -1732,6 +1881,8 @@ type DragState = {
   moved: boolean;
   startX: number;
   startY: number;
+  /** Board geometry measured once at pick-up; reused for every pointer move. */
+  metrics: GridMetrics;
 };
 
 /** Finger must travel this far before a gesture counts as a drag-to-place. */
@@ -1739,6 +1890,42 @@ const DRAG_THRESHOLD_PX = 18;
 
 let drag: DragState | null = null;
 let lastTrailAt = 0;
+
+/**
+ * Drop the drag in progress without placing anything. Used when the touch is
+ * cancelled, its tray slot goes away, or the position changes under it.
+ */
+function cancelDrag(): void {
+  if (!drag) return;
+  drag = null;
+  lastTrailAt = 0;
+  dragGhost.classList.remove('active', 'ghost-lift');
+  clearGhostHighlight();
+  trayEl.querySelectorAll<HTMLElement>('.tray-slot').forEach((el) => {
+    el.style.opacity = '';
+    el.classList.remove('dragging');
+  });
+  if (holdSlotBtn) {
+    holdSlotBtn.style.opacity = '';
+    holdSlotBtn.classList.remove('dragging');
+  }
+}
+
+/** Put the tray back the way it should look after a drag ended without a move. */
+function settleAfterCancelledDrag(): void {
+  if (appView !== 'play' || !playReady) return;
+  paintTray();
+  paintHold();
+  resetHintTimer();
+}
+
+function capturePointer(el: HTMLElement, pointerId: number): void {
+  try {
+    el.setPointerCapture(pointerId);
+  } catch {
+    /* the pointer is already gone; the window listeners clean up */
+  }
+}
 
 function spawnDragTrail(left: number, top: number, width: number, height: number): void {
   const now = performance.now();
@@ -1758,14 +1945,16 @@ function pointerPos(e: PointerEvent): { x: number; y: number } {
   return { x: e.clientX, y: e.clientY };
 }
 
-/** Inner grid metrics matching the board's CSS grid (padding + gap). */
-function boardGridMetrics(): {
+type GridMetrics = {
   left: number;
   top: number;
   pitch: number;
   cellPx: number;
   gapPx: number;
-} {
+};
+
+/** Inner grid metrics matching the board's CSS grid (padding + gap). */
+function boardGridMetrics(): GridMetrics {
   const rect = boardEl.getBoundingClientRect();
   const style = getComputedStyle(boardEl);
   const padL = parseFloat(style.paddingLeft) || 0;
@@ -1806,8 +1995,8 @@ function originFromGhostOverlay(
   piece: PieceDef,
   ghostLeft: number,
   ghostTop: number,
+  m: GridMetrics = boardGridMetrics(),
 ): { row: number; col: number } | null {
-  const m = boardGridMetrics();
   const { rows, cols } = pieceBounds(piece.cells);
   const col = Math.round((ghostLeft - m.left) / m.pitch);
   const row = Math.round((ghostTop - m.top) / m.pitch);
@@ -1871,12 +2060,14 @@ function ghostScreenRect(
 
 function bindDrag(slot: HTMLDivElement, trayIndex: number): void {
   slot.addEventListener('pointerdown', (e) => {
+    // One drag at a time: a second finger must not take over the piece in hand.
+    if (drag) return;
     const piece = game.tray[trayIndex];
     if (!piece || game.gameOver) return;
     e.preventDefault();
     stopHintTimer();
     clearHintHighlight();
-    slot.setPointerCapture(e.pointerId);
+    capturePointer(slot, e.pointerId);
 
     const { x, y } = pointerPos(e);
     const m = boardGridMetrics();
@@ -1891,6 +2082,7 @@ function bindDrag(slot: HTMLDivElement, trayIndex: number): void {
       moved: false,
       startX: x,
       startY: y,
+      metrics: m,
     };
     // Don't dim / show board ghost until the finger actually drags
     slot.classList.add('dragging');
@@ -1912,11 +2104,18 @@ function bindDrag(slot: HTMLDivElement, trayIndex: number): void {
   });
 
   slot.addEventListener('pointerup', (e) => onPointerEnd(e, slot));
-  slot.addEventListener('pointercancel', (e) => onPointerEnd(e, slot));
+  slot.addEventListener('pointercancel', (e) => onPointerCancel(e));
+  // Only the slot losing capture counts. Touch input is first captured by the
+  // child under the finger; moving capture to the slot makes that child report a
+  // loss too, and that event bubbles up here.
+  slot.addEventListener('lostpointercapture', (e) => {
+    if (e.target === slot) onPointerCancel(e);
+  });
 }
 
 function bindHoldDrag(slot: HTMLElement): void {
   slot.addEventListener('pointerdown', (e) => {
+    if (drag) return;
     if (game.gameOver || !game.holdEnabled()) return;
 
     // Tap Hold with a selected tray piece → park / swap
@@ -1952,7 +2151,7 @@ function bindHoldDrag(slot: HTMLElement): void {
     e.preventDefault();
     stopHintTimer();
     clearHintHighlight();
-    slot.setPointerCapture(e.pointerId);
+    capturePointer(slot, e.pointerId);
     const piece = game.hold;
     const { x, y } = pointerPos(e);
     const m = boardGridMetrics();
@@ -1967,6 +2166,7 @@ function bindHoldDrag(slot: HTMLElement): void {
       moved: false,
       startX: x,
       startY: y,
+      metrics: m,
     };
     slot.classList.add('dragging');
   });
@@ -1985,7 +2185,23 @@ function bindHoldDrag(slot: HTMLElement): void {
     updatePlacementGhost(e);
   });
   slot.addEventListener('pointerup', (e) => onPointerEnd(e, slot));
-  slot.addEventListener('pointercancel', (e) => onPointerEnd(e, slot));
+  slot.addEventListener('pointercancel', (e) => onPointerCancel(e));
+  // Only the slot losing capture counts. Touch input is first captured by the
+  // child under the finger; moving capture to the slot makes that child report a
+  // loss too, and that event bubbles up here.
+  slot.addEventListener('lostpointercapture', (e) => {
+    if (e.target === slot) onPointerCancel(e);
+  });
+}
+
+/**
+ * The touch ended without a release on its slot: the system took the gesture,
+ * the slot was removed, or the finger came up somewhere else. Never a move.
+ */
+function onPointerCancel(e: PointerEvent): void {
+  if (!drag || drag.pointerId !== e.pointerId) return;
+  cancelDrag();
+  settleAfterCancelledDrag();
 }
 
 function ghostOverlapsBoard(
@@ -2018,7 +2234,7 @@ function updatePlacementGhost(e: PointerEvent): void {
   if (!drag || !drag.moved) return;
   const { x, y } = pointerPos(e);
   const rect = ghostScreenRect(x, y, drag.piece, drag.cellPx, drag.gapPx, drag.liftPx);
-  const naive = originFromGhostOverlay(drag.piece, rect.left, rect.top);
+  const naive = originFromGhostOverlay(drag.piece, rect.left, rect.top, drag.metrics);
   if (!naive) {
     clearGhostHighlight();
     return;
@@ -2116,17 +2332,32 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
       cellsCleared: result.clears.cells.length,
       allClear: result.score.allClear,
     });
-    maybeCheerNewBest();
+    // Count the goal and the day now; the run may be left before the board fills.
+    if (result.goalJustMet && game.mode === 'daily') bankDailyGoal(profile, game.periodKey);
     saveProfile(profile);
-    checkAndToastGoals();
   }
   sessionClears = game.clearsThisGame;
 
-  sfx.place(cellCount(piece.cells));
-  hapticPlace();
+  // The board, tray and score are painted first and unconditionally. The tray is
+  // rebuilt here, while no drag can be active, and never again from the clear
+  // timer: a rebuild mid-drag would remove the slot the finger is holding.
   paintBoard();
   landPiece(piece, place.row, place.col);
+  paintTray(result.dealt);
+  paintHold();
   updateHud();
+
+  try {
+    sfx.place(cellCount(piece.cells));
+    hapticPlace();
+    if (result.dealt) sfx.refill();
+    if (game.mode !== 'puzzle') {
+      maybeCheerNewBest();
+      checkAndToastGoals();
+    }
+  } catch {
+    /* sound and celebration are cosmetic */
+  }
 
   if (result.clears.clearCount > 0) {
     const delays = clearCascadeDelays(result.clears.cells);
@@ -2149,9 +2380,6 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
         cell.style.animationDelay = '';
       }
       paintBoard();
-      paintTray(result.dealt);
-      paintHold();
-      if (result.dealt) sfx.refill();
       updateHud();
       if (game.mode === 'puzzle' && (game.puzzleWon || game.gameOver)) showPuzzleEnd();
       else if (result.gameOver && game.gameOver) showGameOver();
@@ -2177,13 +2405,13 @@ function onPointerEnd(e: PointerEvent, slot: HTMLElement): void {
       /* effects are cosmetic */
     }
   } else {
-    syncBoardWeather(0, 0, false);
-    celebrateDailyGoal(result.goalJustMet);
-    showScorePop(result.score.total, x, y);
-    paintTray(result.dealt);
-    paintHold();
-    if (result.dealt) sfx.refill();
-    updateHud();
+    try {
+      syncBoardWeather(0, 0, false);
+      celebrateDailyGoal(result.goalJustMet);
+      showScorePop(result.score.total, x, y);
+    } catch {
+      /* effects are cosmetic */
+    }
     if (game.mode === 'puzzle' && (game.puzzleWon || game.gameOver)) showPuzzleEnd();
     else if (result.gameOver) showGameOver();
     else resetHintTimer();
@@ -2296,6 +2524,16 @@ async function restartIfApkNewerThanBundle(): Promise<boolean> {
     const native = info.version?.trim();
     if (native) nativeAppVersion = native;
     if (!native || !isNewerVersion(native, APP_VERSION)) return false;
+    // Once per installed version. If the bundle is still older after that restart
+    // (a release whose version numbers disagree), keep running instead of closing
+    // the app every time it opens.
+    const RESTART_KEY = 'clearnine-restarted-for';
+    try {
+      if (localStorage.getItem(RESTART_KEY) === native) return false;
+      localStorage.setItem(RESTART_KEY, native);
+    } catch {
+      return false;
+    }
     showToast('Update installed — reopening');
     window.setTimeout(() => {
       void App.exitApp();
@@ -2380,7 +2618,16 @@ function boot(): void {
   }
   document.addEventListener('visibilitychange', () => {
     if (document.visibilityState === 'visible' && appView === 'play') snapScore();
+    if (document.visibilityState === 'hidden' && drag) {
+      cancelDrag();
+      settleAfterCancelledDrag();
+    }
   });
+  // Safety net. A slot handles its own release first and clears `drag`; if a
+  // release reaches the window with the drag still set, the slot never saw it.
+  window.addEventListener('pointerup', onPointerCancel);
+  window.addEventListener('pointercancel', onPointerCancel);
+  settleExpiredRuns();
   showSplash(() => {
     showHome();
     void (async () => {
